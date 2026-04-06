@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+
+# OS
+.DS_Store
+
+# Data (large files - regenerate via fetcher)
+data/
+data49/
+
+# Old/backup code
+core/old/
+
+# Research and development scripts
+research/
+
+# Generated reports and visualizations (except the validated one)
+*.pdf
+*.png
+
+# Helper / one-off scripts (not part of production)
+analyze_backtest.py
+audit_report.py
+find_optimal.py
+report_v4.py
+report_v5.py
+report_final.py
+report_pdf.py
+report_pnl.py
+report_full.py
+generate_report.py
+diagnose_detectors.py
+compare.py
+roro_features.py
+rank_tokens.py
+backtest_pnl_report.txt
+report_data.txt
+reference_levels.txt
+
+# Logs
+logs/
+*.log
