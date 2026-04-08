@@ -26,6 +26,23 @@ from core import config
 from core.detectors.ensemble import SRDetector
 
 
+def smart_round(val, price=None):
+    """Round to appropriate precision based on price magnitude.
+
+    `price` is an optional reference price (e.g. current price or key_level)
+    used to pick precision when `val` itself is small (e.g. a zone width).
+    """
+    ref = abs(price) if price else abs(val)
+    if ref == 0: return 0
+    if ref >= 1000: return round(val)
+    if ref >= 10: return round(val, 1)
+    if ref >= 1: return round(val, 2)
+    if ref >= 0.01: return round(val, 4)
+    if ref >= 0.0001: return round(val, 6)
+    if ref >= 0.000001: return round(val, 8)
+    return round(val, 10)
+
+
 class ProfessionalSRAnalysis:
 
     def __init__(self, df: pd.DataFrame, sr_config: Optional[dict] = None,
@@ -250,8 +267,9 @@ class ProfessionalSRAnalysis:
             act = f"Resistance at ${key:,.0f}{structural_tag}. Breakout above ${anchor_price + hw:,.0f}"
 
         return SRZone(
-            price_low=round(anchor_price - hw, 2), price_high=round(anchor_price + hw, 2),
-            mid_price=round(anchor_price, 2), key_level=key,
+            price_low=smart_round(anchor_price - hw, self.current_price),
+            price_high=smart_round(anchor_price + hw, self.current_price),
+            mid_price=smart_round(anchor_price, self.current_price), key_level=key,
             zone_type=level.level_type, tier=tier,
             confluence_score=n_methods, touches=level.touches,
             volume_confirmed=vol_confirmed,
@@ -273,8 +291,10 @@ class ProfessionalSRAnalysis:
                     round(price*2)/2, round(price*4)/4]
         elif price >= 1:
             return [round(price*2)/2, round(price*4)/4, round(price*10)/10]
+        elif price >= 0.0001:
+            return [round(price, 4), round(price, 5), round(price, 6)]
         else:
-            return [round(price*100)/100, round(price*1000)/1000]
+            return [round(price, 8), round(price, 9), round(price, 10)]
 
     def _merge_nearby(self, zones):
         """Merge zones within 1x ATR using cluster-first approach.
@@ -342,9 +362,9 @@ class ProfessionalSRAnalysis:
             mid = price_src.mid_price
 
             merged = SRZone(
-                price_low=round(mid - hw, 2),
-                price_high=round(mid + hw, 2),
-                mid_price=round(mid, 2),
+                price_low=smart_round(mid - hw, price_src.key_level),
+                price_high=smart_round(mid + hw, price_src.key_level),
+                mid_price=smart_round(mid, price_src.key_level),
                 key_level=price_src.key_level,
                 zone_type=meta_src.zone_type,
                 tier=meta_src.tier,
@@ -472,7 +492,7 @@ class ProfessionalSRAnalysis:
         bias = structure["bias"]
 
         # Step 1: Run ensemble on N windows (over-provisioned cap)
-        config.MAX_ZONES_PER_SIDE = target * 3
+        overprovision_cap = target * 3
         all_levels = []
         for w in config.WINDOWS:
             if len(self.df) >= w["days"]:
@@ -531,8 +551,8 @@ class ProfessionalSRAnalysis:
 
         sup.sort(key=rank_key, reverse=True)
         res.sort(key=rank_key, reverse=True)
-        sup = sup[:config.MAX_ZONES_PER_SIDE]
-        res = res[:config.MAX_ZONES_PER_SIDE]
+        sup = sup[:overprovision_cap]
+        res = res[:overprovision_cap]
 
         # Step 6: Post-ranking guarantees — POC and SMAs
         if vp["poc"] and vp["poc"] < self.current_price:
@@ -540,7 +560,7 @@ class ProfessionalSRAnalysis:
                 pz = self._level_to_zone(SRLevel(price=vp["poc"], level_type="support",
                      strength=0.40, method="volume_profile", touches=0, volume_weight=0.9), bias)
                 pz.notes = "Volume POC"
-                if len(sup) >= config.MAX_ZONES_PER_SIDE: sup[-1] = pz
+                if len(sup) >= overprovision_cap: sup[-1] = pz
                 else: sup.append(pz)
 
         for ma_p in [50, 100, 200]:
@@ -555,9 +575,6 @@ class ProfessionalSRAnalysis:
                  method="touch_count", touches=0, volume_weight=0.0, recency_score=0.5), bias)
             mz.notes = f"SMA {ma_p} (${mv:,.0f})"
             tgt.append(mz)
-
-        # Restore cap
-        config.MAX_ZONES_PER_SIDE = target
 
         # Re-merge after SMA/POC injections
         sup = self._merge_nearby(sup)
@@ -679,18 +696,14 @@ def analyze_token(symbol: str, df: pd.DataFrame, data_dir: str = "data") -> Dict
     supports = result["support_zones"]
     resistances = result["resistance_zones"]
 
-    def smart_round(val):
-        if val >= 1000: return round(val)
-        elif val >= 10: return round(val, 1)
-        elif val >= 1: return round(val, 2)
-        else: return round(val, 4)
+    sr = lambda val: smart_round(val, ms["current_price"])
 
     r_list = []
     for z in sorted(resistances, key=lambda x: x.mid_price):
         dist_pct = round((z.mid_price - ms["current_price"]) / ms["current_price"] * 100, 1)
         r_list.append({
-            "zone": [smart_round(z.price_low), smart_round(z.price_high)],
-            "key_level": smart_round(z.key_level), "tier": z.tier,
+            "zone": [sr(z.price_low), sr(z.price_high)],
+            "key_level": sr(z.key_level), "tier": z.tier,
             "distance_pct": dist_pct, "confluence": z.confluence_score,
             "touches": z.touches,
             "volume_confirmed": bool(getattr(z, 'volume_confirmed', False)),
@@ -703,8 +716,8 @@ def analyze_token(symbol: str, df: pd.DataFrame, data_dir: str = "data") -> Dict
     for z in sorted(supports, key=lambda x: x.mid_price, reverse=True):
         dist_pct = round((ms["current_price"] - z.mid_price) / ms["current_price"] * 100, 1)
         s_list.append({
-            "zone": [smart_round(z.price_low), smart_round(z.price_high)],
-            "key_level": smart_round(z.key_level), "tier": z.tier,
+            "zone": [sr(z.price_low), sr(z.price_high)],
+            "key_level": sr(z.key_level), "tier": z.tier,
             "distance_pct": dist_pct, "confluence": z.confluence_score,
             "touches": z.touches,
             "volume_confirmed": bool(getattr(z, 'volume_confirmed', False)),
@@ -734,37 +747,37 @@ def analyze_token(symbol: str, df: pd.DataFrame, data_dir: str = "data") -> Dict
         r_extended = None
 
     bullish = {}
-    if hold_s: bullish["hold_above"] = smart_round(hold_s.key_level)
-    if tp_r: bullish["next_target"] = smart_round(tp_r.key_level)
-    if r_extended: bullish["extended_target"] = smart_round(r_extended.key_level)
+    if hold_s: bullish["hold_above"] = sr(hold_s.key_level)
+    if tp_r: bullish["next_target"] = sr(tp_r.key_level)
+    if r_extended: bullish["extended_target"] = sr(r_extended.key_level)
     inv_s = second_s if second_s and second_s != hold_s else third_s
-    if inv_s: bullish["invalidation"] = smart_round(inv_s.key_level)
-    elif hold_s: bullish["invalidation"] = smart_round(hold_s.price_low)
+    if inv_s: bullish["invalidation"] = sr(inv_s.key_level)
+    elif hold_s: bullish["invalidation"] = sr(hold_s.price_low)
 
     bearish = {}
-    if hold_s: bearish["fails_at"] = smart_round(hold_s.key_level)
+    if hold_s: bearish["fails_at"] = sr(hold_s.key_level)
     retest_s = second_s if second_s and second_s != hold_s else third_s
-    if retest_s: bearish["retests"] = smart_round(retest_s.key_level)
-    if third_s and third_s != retest_s: bearish["reopens"] = smart_round(third_s.key_level)
-    elif retest_s: bearish["reopens"] = smart_round(retest_s.price_low)
+    if retest_s: bearish["retests"] = sr(retest_s.key_level)
+    if third_s and third_s != retest_s: bearish["reopens"] = sr(third_s.key_level)
+    elif retest_s: bearish["reopens"] = sr(retest_s.price_low)
 
     triggers = {}
-    if hold_s: triggers["buy_the_dip"] = smart_round(hold_s.key_level)
+    if hold_s: triggers["buy_the_dip"] = sr(hold_s.key_level)
     stop_s = second_s if second_s and second_s != hold_s else third_s
-    if stop_s: triggers["stop_loss"] = smart_round(stop_s.price_low)
-    elif hold_s: triggers["stop_loss"] = smart_round(hold_s.price_low)
+    if stop_s: triggers["stop_loss"] = sr(stop_s.price_low)
+    elif hold_s: triggers["stop_loss"] = sr(hold_s.price_low)
 
     first_r_above = None
     for z in sorted_r:
         if z.key_level > ms["current_price"] * 1.02:
             first_r_above = z
             break
-    if first_r_above: triggers["take_profit"] = smart_round(first_r_above.key_level)
-    elif tp_r: triggers["take_profit"] = smart_round(tp_r.key_level)
+    if first_r_above: triggers["take_profit"] = sr(first_r_above.key_level)
+    elif tp_r: triggers["take_profit"] = sr(tp_r.key_level)
 
     return {
         "symbol": symbol.upper(),
-        "price": round(ms["current_price"], 2),
+        "price": sr(ms["current_price"]),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "data_points": len(df),
         "market_structure": {
@@ -777,8 +790,8 @@ def analyze_token(symbol: str, df: pd.DataFrame, data_dir: str = "data") -> Dict
         "scenarios": {"bullish": bullish, "bearish": bearish},
         "triggers": triggers,
         "volume_profile": {
-            "poc": smart_round(vp["poc"]) if vp["poc"] else None,
-            "value_area_low": smart_round(vp["val"]) if vp["val"] else None,
-            "value_area_high": smart_round(vp["vah"]) if vp["vah"] else None,
+            "poc": sr(vp["poc"]) if vp["poc"] else None,
+            "value_area_low": sr(vp["val"]) if vp["val"] else None,
+            "value_area_high": sr(vp["vah"]) if vp["vah"] else None,
         },
     }

@@ -32,7 +32,7 @@ from core.tpsl import compute_tp_sl
 from core.models import compute_atr
 from core.filters import (
     compute_rsi, compute_adx_di, compute_mt_regime,
-    bollinger_pctb, relative_volume,
+    relative_volume,
 )
 from core.config import ALL, TOP_3_SET, SELECTED_SET, TOP_20_SET, get_tier
 
@@ -87,7 +87,6 @@ class Trade:
     f_di_bullish: bool = False
     f_adx_trend: bool = False
     f_mt_regime: bool = False
-    f_bollinger: bool = False
     f_rvol: bool = False
     f_rsi_cap: bool = False
     # Raw indicator values for deeper analysis
@@ -129,9 +128,6 @@ def evaluate_filters(df: pd.DataFrame, btc_df: pd.DataFrame,
     # MT regime
     mt_state, _ = compute_mt_regime(df["close"])
 
-    # Bollinger %B
-    boll_pass, _ = bollinger_pctb(df)
-
     # Relative volume
     rvol_pass, _ = relative_volume(df)
 
@@ -142,7 +138,6 @@ def evaluate_filters(df: pd.DataFrame, btc_df: pd.DataFrame,
         "f_di_bullish": adx_di["di_plus"] > adx_di["di_minus"],
         "f_adx_trend": adx_di["adx"] > 20,
         "f_mt_regime": mt_state != "D",
-        "f_bollinger": boll_pass,
         "f_rvol": rvol_pass,
         "f_rsi_cap": token_rsi <= 80,
         # Raw values
@@ -380,7 +375,7 @@ CSV_COLUMNS = [
     "close_d5", "close_d7", "close_d10", "close_d14", "close_d21",
     "f_btc_rsi_floor", "f_token_rsi_momentum", "f_rr_min",
     "f_di_bullish", "f_adx_trend", "f_mt_regime",
-    "f_bollinger", "f_rvol", "f_rsi_cap",
+    "f_rvol", "f_rsi_cap",
     "btc_rsi", "token_rsi", "adx", "di_plus", "di_minus", "mt_regime",
 ]
 

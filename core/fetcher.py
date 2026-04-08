@@ -114,6 +114,82 @@ def fetch_geckoterminal(symbol: str, days: int = 180) -> Optional[pd.DataFrame]:
         return None
 
 
+def fetch_mexc(symbol: str, days: int = 180) -> Optional[pd.DataFrame]:
+    """Fetch daily OHLCV from MEXC API (free, no key)."""
+    pair = f"{symbol.upper()}USDT"
+    end_ts = int(time.time())
+    start_ts = end_ts - (days * 86400)
+    url = "https://api.mexc.com/api/v3/klines"
+    params = {
+        "symbol": pair, "interval": "1d",
+        "startTime": start_ts * 1000, "endTime": end_ts * 1000, "limit": 1000,
+    }
+
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data or not isinstance(data, list):
+            return None
+
+        rows = []
+        for candle in data:
+            rows.append({
+                "timestamp": pd.to_datetime(candle[0], unit="ms", utc=True),
+                "open": float(candle[1]), "high": float(candle[2]),
+                "low": float(candle[3]), "close": float(candle[4]),
+                "volume": float(candle[5]),
+            })
+        return pd.DataFrame(rows).set_index("timestamp")
+    except Exception as e:
+        print(f"[MEXC] Failed for {pair}: {e}", file=sys.stderr)
+        return None
+
+
+def fetch_hyperliquid(symbol: str, days: int = 180) -> Optional[pd.DataFrame]:
+    """Fetch daily OHLCV from Hyperliquid public info API.
+
+    Hyperliquid is the canonical price source for HYPE (it's the chain's
+    native token). POST endpoint, no auth. Returns base-coin volume
+    convention (matches Binance/MEXC).
+    """
+    url = "https://api.hyperliquid.xyz/info"
+    end_ms = int(time.time() * 1000)
+    start_ms = end_ms - (days * 86400 * 1000)
+
+    body = {
+        "type": "candleSnapshot",
+        "req": {
+            "coin": symbol.upper(),
+            "interval": "1d",
+            "startTime": start_ms,
+            "endTime": end_ms,
+        },
+    }
+
+    try:
+        resp = requests.post(url, json=body, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data or not isinstance(data, list):
+            return None
+
+        rows = []
+        for c in data:
+            rows.append({
+                "timestamp": pd.to_datetime(c["t"], unit="ms", utc=True),
+                "open":   float(c["o"]),
+                "high":   float(c["h"]),
+                "low":    float(c["l"]),
+                "close":  float(c["c"]),
+                "volume": float(c["v"]),
+            })
+        return pd.DataFrame(rows).set_index("timestamp").sort_index()
+    except Exception as e:
+        print(f"[Hyperliquid] Failed for {symbol}: {e}", file=sys.stderr)
+        return None
+
+
 def fetch_coingecko(symbol: str, days: int = 180) -> Optional[pd.DataFrame]:
     """Fetch daily OHLC from CoinGecko free API."""
     coin_id = config.COINGECKO_ID_MAP.get(symbol.upper(), symbol.lower())
@@ -167,13 +243,27 @@ def fetch_coingecko(symbol: str, days: int = 180) -> Optional[pd.DataFrame]:
 
 
 def fetch_data(symbol: str, days: int = 180) -> pd.DataFrame:
-    """Auto-detect: Binance → GeckoTerminal → CoinGecko."""
+    """Auto-detect: Binance → MEXC → Hyperliquid → GeckoTerminal → CoinGecko."""
     print(f"[{symbol}] Fetching data...", file=sys.stderr)
 
     df = fetch_binance(symbol, days)
     if df is not None and len(df) >= 30:
         print(f"[{symbol}] Binance OK — {len(df)} daily candles", file=sys.stderr)
         return df
+
+    if symbol.upper() in config.MEXC_TOKENS:
+        print(f"[{symbol}] Trying MEXC...", file=sys.stderr)
+        df = fetch_mexc(symbol, days)
+        if df is not None and len(df) >= 30:
+            print(f"[{symbol}] MEXC OK — {len(df)} candles", file=sys.stderr)
+            return df
+
+    if symbol.upper() in config.HYPERLIQUID_TOKENS:
+        print(f"[{symbol}] Trying Hyperliquid...", file=sys.stderr)
+        df = fetch_hyperliquid(symbol, days)
+        if df is not None and len(df) >= 30:
+            print(f"[{symbol}] Hyperliquid OK — {len(df)} candles", file=sys.stderr)
+            return df
 
     if symbol.upper() in config.GECKOTERMINAL_POOL_MAP:
         print(f"[{symbol}] Trying GeckoTerminal...", file=sys.stderr)
@@ -189,7 +279,8 @@ def fetch_data(symbol: str, days: int = 180) -> pd.DataFrame:
         return df
 
     raise RuntimeError(
-        f"Could not fetch data for {symbol} from Binance, GeckoTerminal, or CoinGecko."
+        f"Could not fetch data for {symbol} from Binance, MEXC, Hyperliquid, "
+        f"GeckoTerminal, or CoinGecko."
     )
 
 
@@ -323,11 +414,23 @@ def fetch_and_cache(symbol: str, days: int, data_dir: str, force: bool = False) 
                 save_to_cache(combined, symbol, data_dir)
                 return "append"
 
-    # Full re-download
+    # Full re-download: Binance → MEXC → Hyperliquid → GeckoTerminal → CoinGecko
     df = fetch_binance(symbol, days)
     if df is None or len(df) < 30:
         time.sleep(0.5)
         df = fetch_binance(symbol, days)
+
+    if (df is None or len(df) < 30) and symbol.upper() in config.MEXC_TOKENS:
+        time.sleep(0.5)
+        df = fetch_mexc(symbol, days)
+
+    if (df is None or len(df) < 30) and symbol.upper() in config.HYPERLIQUID_TOKENS:
+        time.sleep(0.5)
+        df = fetch_hyperliquid(symbol, days)
+
+    if (df is None or len(df) < 30) and symbol.upper() in config.GECKOTERMINAL_POOL_MAP:
+        time.sleep(0.5)
+        df = fetch_geckoterminal(symbol, days)
 
     if df is None or len(df) < 30:
         time.sleep(1.5)

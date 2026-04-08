@@ -131,17 +131,6 @@ def rsi_cap(df: pd.DataFrame, period: int = 10,
     return False, f"RSI({period})={rsi:.1f} > {threshold} (overbought)"
 
 
-def token_adx_trend(df: pd.DataFrame, period: int = 14,
-                    threshold: float = 20.0,
-                    **kwargs) -> Tuple[bool, str]:
-    """Token ADX(14) > threshold — trend exists."""
-    indicators = compute_adx_di(df, period)
-    adx = indicators["adx"]
-    if adx > threshold:
-        return True, ""
-    return False, f"ADX({period})={adx:.1f} <= {threshold}"
-
-
 def token_di_bullish(df: pd.DataFrame, period: int = 14,
                      **kwargs) -> Tuple[bool, str]:
     """Token DI+ > DI- — trend is bullish."""
@@ -165,9 +154,9 @@ def min_risk_reward(df: pd.DataFrame, raw_rr: float = 0.0,
     return False, f"R:R={raw_rr:.2f} < {threshold}"
 
 
-# ── MT SMA Regime Gate ──────────────────────────────────────
+# ── MT SMA Regime Filter ────────────────────────────────────
 # Single-timeframe regime filter using SMA40 + slope over 20 bars.
-# Gate OFF when regime is D (downtrend: price < SMA AND SMA falling).
+# Filter blocks entries when regime is D (downtrend: price < SMA AND SMA falling).
 #
 # Walk-forward validated on 5y data (BTC, ETH, SOL), 12m IS / 6m OOS:
 #   - SMA40 / slope 20 / confirm 1 beat all MTF combos
@@ -255,51 +244,17 @@ def compute_mt_regime(close: pd.Series) -> Tuple[str, str]:
     return state, f"SMA{cfg['sma']} regime: {state}"
 
 
-def mt_regime_gate(df: pd.DataFrame, **kwargs) -> Tuple[bool, str]:
-    """MT SMA Regime Gate — blocks entries when regime is D (downtrend).
+def mt_regime(df: pd.DataFrame, **kwargs) -> Tuple[bool, str]:
+    """MT SMA regime filter — blocks entries when regime is D (downtrend).
 
     Uses SMA40 with slope measured over 20 bars, no confirmation delay.
-    Gate ON when regime is U (uptrend) or T (transition).
-    Gate OFF when regime is D (price < SMA40 AND SMA40 falling).
+    Passes when regime is U (uptrend) or T (transition).
+    Fails when regime is D (price < SMA40 AND SMA40 falling).
     """
     state, desc = compute_mt_regime(df["close"])
     if state != "D":
         return True, ""
-    return False, f"MT gate OFF ({desc})"
-
-
-# ── Bollinger %B Overbought Filter ──────────────────────────
-# Blocks entries when price is in the top 20% of its Bollinger Band.
-#
-# Walk-forward validated on 49 tokens, 3 OOS folds:
-#   - W/L ratio improved from 0.73 to 1.21
-#   - Only filter that turned the strategy profitable (+8.7% vs -25%)
-#   - Avg loss shrank from -8.1% to -6.8%
-#   - MaxDD dropped from 47.6% to 31.4%
-
-def bollinger_pctb(df: pd.DataFrame, period: int = 20, std_mult: float = 2.0,
-                   threshold: float = 0.80, **kwargs) -> Tuple[bool, str]:
-    """Bollinger %B < threshold — blocks overbought entries.
-
-    %B = (price - lower_band) / (upper_band - lower_band)
-    %B > 0.80 means price is in top 20% of Bollinger range → likely to revert.
-    """
-    close = df["close"]
-    if len(close) < period:
-        return True, ""  # not enough data, pass
-    sma = close.rolling(period).mean().iloc[-1]
-    std = close.rolling(period).std().iloc[-1]
-    if std == 0:
-        return True, ""
-    upper = sma + std_mult * std
-    lower = sma - std_mult * std
-    band_width = upper - lower
-    if band_width == 0:
-        return True, ""
-    pctb = float((close.iloc[-1] - lower) / band_width)
-    if pctb < threshold:
-        return True, ""
-    return False, f"BB %B={pctb:.2f} >= {threshold} (overbought)"
+    return False, f"MT regime D ({desc})"
 
 
 # ── Relative Volume Filter ─────────────────────────────────
@@ -333,11 +288,9 @@ AVAILABLE_FILTERS = {
     "btc_rsi_floor": btc_rsi_floor,
     "token_rsi_momentum": token_rsi_momentum,
     "rsi_cap": rsi_cap,
-    "token_adx_trend": token_adx_trend,
     "token_di_bullish": token_di_bullish,
     "min_risk_reward": min_risk_reward,
-    "mt_regime_gate": mt_regime_gate,
-    "bollinger_pctb": bollinger_pctb,
+    "mt_regime": mt_regime,
     "relative_volume": relative_volume,
 }
 
@@ -348,7 +301,7 @@ class FilterChain:
     """Compose multiple filters into a chain. All must pass.
 
     Usage:
-        chain = FilterChain(["btc_rsi_floor", "token_adx_trend"])
+        chain = FilterChain(["btc_rsi_floor", "token_di_bullish"])
         passed, reasons = chain.check(df, btc_df=btc_df)
 
         # Or with function references:

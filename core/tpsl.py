@@ -1,14 +1,16 @@
 """
-TPSL — Take-Profit / Stop-Loss and S/R quality scoring.
+TPSL — Take-Profit / Stop-Loss computation.
 =========================================================
-Simple rules:
-  TP = nearest resistance (cascade to next if within 1 ATR of price)
-  SL = nearest support (cascade to next if within 1 ATR of price)
-  RR = (TP - price) / (price - SL)
+Simple cascade rules:
+  TP = walk resistances nearest-first; cascade through any within 1 ATR;
+       break on the first level >= 1 ATR away. If all are within 1 ATR,
+       keep the farthest. If the final pick is < 0.5 ATR away, return None.
+  SL = symmetric on the support side.
+  RR = (TP - price) / (price - SL), only when both sides are usable.
 
-Quality scores (0-1):
-  Support Confidence — how likely the SL level holds
-  Resistance Permeability — how likely the TP level breaks
+Partial setups (one side None) are still returned with `qualified=True`
+so the UI can render the available structure; only setups with NO usable
+side are excluded.
 """
 
 import json
@@ -18,6 +20,7 @@ from datetime import datetime, timezone
 
 
 from core.models import fmt_price
+from core import config
 
 
 class NumpySafeEncoder(json.JSONEncoder):
@@ -30,59 +33,20 @@ class NumpySafeEncoder(json.JSONEncoder):
 
 
 # ─────────────────────────────────────────────────────────────
-# Quality Scores
-# ─────────────────────────────────────────────────────────────
-
-def score_support_confidence(support_zones: List[dict]) -> float:
-    """How likely is the nearest support to hold? (0.0 - 1.0)"""
-    if not support_zones:
-        return 0.0
-    s = support_zones[0]
-    score = 0.0
-    score += 0.30 if s["tier"] == "Major" else 0.10
-    anchor = (s.get("anchor_type") or "").lower()
-    if anchor == "body": score += 0.25
-    elif anchor == "wick": score += 0.15
-    else: score += 0.05
-    if s.get("volume_confirmed"): score += 0.20
-    score += min(0.15, (s.get("confluence", 1) / 5) * 0.15)
-    score += min(0.10, (s.get("touches", 0) / 20) * 0.10)
-    return round(min(1.0, score), 4)
-
-
-def score_resistance_permeability(resistance_zones: List[dict]) -> float:
-    """How likely is the nearest resistance to BREAK? (0.0 - 1.0)
-    Higher = weaker resistance = better for a long trade."""
-    if not resistance_zones:
-        return 0.8
-    r = resistance_zones[0]
-    score = 0.0
-    score += 0.30 if r["tier"] == "Minor" else 0.10
-    anchor = (r.get("anchor_type") or "").lower()
-    if anchor in ("stat", "wick", ""): score += 0.25
-    elif anchor == "body": score += 0.10
-    if not r.get("volume_confirmed"): score += 0.20
-    score += max(0.0, (1 - r.get("confluence", 1) / 5)) * 0.15
-    score += max(0.0, (1 - r.get("touches", 0) / 20)) * 0.10
-    return round(min(1.0, score), 4)
-
-
-# ─────────────────────────────────────────────────────────────
 # TP / SL / RR Calculation
 # ─────────────────────────────────────────────────────────────
 
-def _compute_tp_sl_core(analysis: dict, tp_atr_mult: float, sl_atr_mult: float) -> Optional[dict]:
+def compute_tp_sl(analysis: dict) -> Optional[dict]:
     """
-    Core TP/SL computation with tuneable ATR cascade thresholds.
+    Compute TP, SL, and R:R for one token.
 
-    Parameters
-    ----------
-    tp_atr_mult : float
-        Minimum distance (in ATR multiples) a resistance must be from price
-        to qualify as TP.  Lower = take profit sooner.
-    sl_atr_mult : float
-        Minimum distance (in ATR multiples) a support must be from price
-        to qualify as SL.  Higher = wider stop, more breathing room.
+    Cascade rules:
+      TP = walk resistances nearest-first. Always update tp as we cascade
+           past levels within 1 ATR. Break on the first level >= 1 ATR
+           away. If all are within 1 ATR, keep the farthest.
+      SL = symmetric on the support side.
+      If the final pick is < 0.5 ATR from price, set that side to None
+      (we never fabricate a synthetic price ± atr level).
     """
     symbol = analysis.get("symbol", "???")
     price = analysis.get("price")
@@ -94,79 +58,85 @@ def _compute_tp_sl_core(analysis: dict, tp_atr_mult: float, sl_atr_mult: float) 
     ms = analysis.get("market_structure", {})
     atr = ms.get("atr14", 0)
 
-    tp_min_dist = atr * tp_atr_mult
-    sl_min_dist = atr * sl_atr_mult
-
-    # ── Find TP: nearest resistance, cascade if within tp_min_dist ──
+    # ── Find TP: cascade through resistances (nearest-first) ──
+    # Walk resistances sorted nearest-first (ascending). Keep updating tp
+    # as we cascade past levels within 1 ATR of price.  Break on the first
+    # level that is >= 1 ATR away.  If ALL are within 1 ATR, keep the
+    # farthest (last one we saw).
     tp = None
     for r_zone in resistances:
         r_level = r_zone.get("key_level", 0)
-        if r_level > price and (r_level - price) >= tp_min_dist:
-            tp = r_level
-            break
-    # Fallback: take any resistance above price even if close
-    if tp is None:
-        for r_zone in resistances:
-            r_level = r_zone.get("key_level", 0)
-            if r_level > price:
-                tp = r_level
-                break
+        if r_level <= price:
+            continue
+        tp = r_level                       # always update (cascade)
+        if (r_level - price) >= atr:
+            break                          # far enough — stop
 
-    # ── Find SL: nearest support, cascade if within sl_min_dist ──
+    # ── Find SL: cascade through supports (nearest-first) ──
+    # Supports are sorted descending (nearest-first).  Same logic: keep
+    # updating sl, break when distance >= 1 ATR.  If all within ATR, keep
+    # the farthest (lowest level).
     sl = None
     for s_zone in supports:
         s_level = s_zone.get("key_level", 0)
-        if s_level < price and (price - s_level) >= sl_min_dist:
-            sl = s_level
-            break
-    # Fallback: take any support below price even if close
-    if sl is None:
-        for s_zone in supports:
-            s_level = s_zone.get("key_level", 0)
-            if s_level < price:
-                sl = s_level
-                break
+        if s_level >= price:
+            continue
+        sl = s_level                       # always update (cascade)
+        if (price - s_level) >= atr:
+            break                          # far enough — stop
 
-    # ── Can't compute without both ──
-    if tp is None or sl is None:
-        missing = []
-        if tp is None: missing.append("no TP (no resistance above)")
-        if sl is None: missing.append("no SL (no support below)")
-        return {
-            "symbol": symbol, "price": price,
-            "take_profit": tp, "stop_loss": sl,
-            "potential_gain_pct": 0, "potential_loss_pct": 0,
-            "raw_rr": 0,
-            "support_confidence": score_support_confidence(supports),
-            "resistance_permeability": score_resistance_permeability(resistances),
-            "reason": ", ".join(missing),
-            "market_structure": ms,
-            "support": supports, "resistance": resistances,
-            "volume_profile": analysis.get("volume_profile"),
-        }
+    # ── ATR distance: best-effort partial setup ──
+    # If the cascade exhausted into a level closer than 0.5 ATR, we DO NOT
+    # fabricate a synthetic `price ± atr` level (that misleads the trader),
+    # and we DO NOT disqualify the entire token (the trader still wants to
+    # see the structure). Instead we set the offending side to None so the
+    # UI displays "—". The other side, if usable, is preserved.
+    if atr > 0:
+        if tp is not None and (tp - price) < 0.5 * atr:
+            tp = None
+        if sl is not None and (price - sl) < 0.5 * atr:
+            sl = None
 
-    # ── R:R ──
-    potential_gain = tp - price
-    potential_loss = price - sl
-    if potential_loss <= 0:
-        return None
+    # ── R:R ── computable only when both sides are usable
+    if tp is not None and sl is not None:
+        potential_gain = tp - price
+        potential_loss = price - sl
+        if potential_loss <= 0:
+            return None
+        raw_rr = round(potential_gain / potential_loss, 2)
+        gain_pct = round((potential_gain / price) * 100, 2)
+        loss_pct = round((potential_loss / price) * 100, 2)
+        gain_abs = round(potential_gain, 2)
+        loss_abs = round(potential_loss, 2)
+    else:
+        raw_rr = None
+        gain_pct = None
+        loss_pct = None
+        gain_abs = None
+        loss_abs = None
 
-    raw_rr = potential_gain / potential_loss
-    gain_pct = (potential_gain / price) * 100
-    loss_pct = (potential_loss / price) * 100
+    # Qualified iff at least one side has a usable cascaded level. A token
+    # with both sides None has no tradeable structure at all.
+    has_any_side = tp is not None or sl is not None
+    qualified = has_any_side
+    reason = None
+    if not has_any_side:
+        reason = "no usable structure (no TP and no SL)"
 
     return {
         "symbol": symbol,
         "price": price,
         "take_profit": tp,
         "stop_loss": sl,
-        "potential_gain_pct": round(gain_pct, 2),
-        "potential_loss_pct": round(loss_pct, 2),
-        "potential_gain_abs": round(potential_gain, 2),
-        "potential_loss_abs": round(potential_loss, 2),
-        "raw_rr": round(raw_rr, 2),
-        "support_confidence": score_support_confidence(supports),
-        "resistance_permeability": score_resistance_permeability(resistances),
+        "potential_gain_pct": gain_pct,
+        "potential_loss_pct": loss_pct,
+        "potential_gain_abs": gain_abs,
+        "potential_loss_abs": loss_abs,
+        "raw_rr": raw_rr,
+        # qualified=True when at least one cascade side is tradeable.
+        # Frontend renders "—" for any side that is None.
+        "qualified": qualified,
+        "reason": reason,
         "market_structure": ms,
         "nearest_support": supports[0] if supports else None,
         "nearest_resistance": resistances[0] if resistances else None,
@@ -176,51 +146,34 @@ def _compute_tp_sl_core(analysis: dict, tp_atr_mult: float, sl_atr_mult: float) 
     }
 
 
-def compute_tp_sl(analysis: dict) -> Optional[dict]:
-    """
-    Standard TP/SL: cascade past levels within 1 ATR of price.
-
-    TP = nearest resistance ≥ 1 ATR away.
-    SL = nearest support ≥ 1 ATR away.
-    """
-    return _compute_tp_sl_core(analysis, tp_atr_mult=1.0, sl_atr_mult=1.0)
-
-
-def compute_tp_sl_conservative(analysis: dict) -> Optional[dict]:
-    """
-    Conservative TP/SL — less aggressive targets, wider stops.
-
-    TP = nearest resistance above price (no ATR cascade — accepts close
-         levels, locking in profit sooner).
-    SL = nearest support ≥ 2 ATR away (wider stop, more breathing room,
-         fewer noise stop-outs).
-    """
-    return _compute_tp_sl_core(analysis, tp_atr_mult=0.0, sl_atr_mult=2.0)
-
-
 # ─────────────────────────────────────────────────────────────
 # Output
 # ─────────────────────────────────────────────────────────────
 
+def _rr_sort_key(s: dict) -> float:
+    """Sort key for raw_rr — None (partial setups) sort below all real values."""
+    rr = s.get("raw_rr")
+    return rr if rr is not None else -1.0
+
+
 def output_json(scored: List[dict], top_n: int = 5) -> str:
-    has_tpsl = [s for s in scored if s.get("take_profit") and s.get("stop_loss")]
-    has_tpsl.sort(key=lambda s: s.get("raw_rr", 0), reverse=True)
+    qualified = [s for s in scored if s.get("qualified")]
+    qualified.sort(key=_rr_sort_key, reverse=True)
 
     disqualified = []
     for s in scored:
-        if s.get("take_profit") and s.get("stop_loss"):
+        if s.get("qualified"):
             continue
-        entry = {"symbol": s["symbol"], "raw_rr": s.get("raw_rr", 0)}
-        entry["reason"] = s.get("reason", f"R:R {s.get('raw_rr', 0):.1f} (no TP/SL)")
+        entry = {"symbol": s["symbol"], "raw_rr": s.get("raw_rr")}
+        entry["reason"] = s.get("reason", "no usable structure")
         disqualified.append(entry)
 
     output = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "model": {},
         "tokens_analyzed": len(scored),
-        "tokens_with_tpsl": len(has_tpsl),
-        "ranking": has_tpsl[:top_n],
+        "tokens_qualified": len(qualified),
+        "ranking": qualified[:top_n],
         "disqualified": disqualified,
-        "analyses": sorted(scored, key=lambda s: s.get("raw_rr", 0), reverse=True),
+        "analyses": sorted(scored, key=_rr_sort_key, reverse=True),
     }
     return json.dumps(output, indent=2, ensure_ascii=False, cls=NumpySafeEncoder)

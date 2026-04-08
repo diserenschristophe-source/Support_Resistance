@@ -194,6 +194,12 @@ BINANCE_SYMBOL_MAP = {
     "EOS": "EOSUSDT", "NEO": "NEOUSDT",
 }
 
+# Tokens routed to MEXC public klines (no Binance listing).
+MEXC_TOKENS = {"KAS", "MNT"}
+
+# Tokens routed to Hyperliquid info API (chain-native).
+HYPERLIQUID_TOKENS = {"HYPE"}
+
 GECKOTERMINAL_POOL_MAP = {
     "BORG": ("solana", "Ab5pqdTEw1McsizEaQfLEyMLhkfxwzrpyqFASpftQcpq"),
 }
