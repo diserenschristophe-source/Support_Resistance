@@ -88,21 +88,10 @@ diff <(jq -S . ../sr-dashboard/output/rank_output.json) \
 
 ## Stale research scripts (known broken, patch on revival)
 
-These scripts were already drifted out of sync with `core/` before this repo
-was reorganised. They fail at import because they reference symbols that no
-longer exist (`compute_token_score`, `MTF_REGIME_CONFIG`, `FALLBACK_TOP_50`).
-None of them block anything else — they're parked for resurrection if the
-underlying experiment becomes interesting again.
-
-- `research/backtest.py`
-- `research/backtest_mtf.py`
-- `research/backtest_portfolio.py`
-- `research/backtest_roro.py`
-- `research/mtf_structure.py`
-
-To revive: rename `compute_token_score` → `compute_tp_sl` and adapt the call
-site to the current 1-arg signature; rebuild whatever `MTF_REGIME_CONFIG` /
-`FALLBACK_TOP_50` constants are needed locally.
+`research/mtf_structure.py` references `MTF_REGIME_CONFIG`, which no longer
+exists in `core/filters.py`. It fails at import but blocks nothing else. To
+revive: rebuild whatever `MTF_REGIME_CONFIG` shape it needs locally, or wire
+it to the current `compute_mt_regime` / `detect_regime_series` API.
 
 ## Quick start
 
