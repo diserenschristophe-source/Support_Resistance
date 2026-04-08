@@ -1,160 +1,144 @@
 # Support_Resistance
 
-Research library for automated support/resistance detection on crypto assets using a 5-method ensemble detector with multi-timeframe analysis and walk-forward validated entry filters.
+Standalone research lab for support/resistance detection on crypto assets.
+Shares its `core/` engine verbatim with the production
+[sr-dashboard](../sr-dashboard) repo, so any experiment validated here can be
+moved into the dashboard with no API surgery — and any change in `core/` can
+be diffed across both repos to confirm parity.
 
-## Quick Start
+## Why this repo exists
+
+`sr-dashboard` is the production pipeline (fetch → analyze → rank → filters →
+charts → report → web UI). This repo is the research playground that uses the
+**same** `core/` so we can iterate on detectors, filters, and backtests
+without touching the production cron, web server, or LLM stack.
+
+## Structure
+
+```
+Support_Resistance/
+  core/                         # IDENTICAL to sr-dashboard/core/
+    config.py
+    models.py                   # SRLevel, SRZone, compute_atr
+    sr_analysis.py              # ProfessionalSRAnalysis + analyze_token()
+    fetcher.py                  # multi-source OHLCV (Binance / GeckoTerminal / MEXC / Hyperliquid / CoinGecko)
+    filters.py                  # entry filters + AVAILABLE_FILTERS + FilterChain
+    tpsl.py                     # compute_tp_sl + output_json + NumpySafeEncoder
+    utils.py                    # atomic_json_write
+    detectors/                  # 5-method ensemble
+      ensemble.py
+      market_structure.py       # 40% weight
+      touch_count.py            # 25% weight
+      nison_body.py             # 15% weight
+      volume_profile.py         # 10% weight
+      polarity_flip.py          # 10% weight
+
+  research/                     # research & experimentation scripts
+    compare.py                  # validate detector levels vs Grok / Perplexity / manual reference
+    diagnose_detectors.py       # per-detector chart overlay (debugging)
+    backtest_model.py           # signal log recorder → backtest_results.csv
+    backtest_hourly.py
+    backtest_rsi_sr.py
+    roro_features.py            # 7 risk-on/off market features
+    regime.py
+    rsi_filter.py
+    scan_regimes.py             # multi-token regime scanner
+    weekly_structure.py
+    fetch_hourly.py
+    generate_backtest_report.py
+    generate_comparison_pdf.py
+    md_to_pdf.py
+    AUDIT_REPORT.md
+    PRESET_VALIDATION_REPORT.md
+
+  data/                         # cached OHLCV CSVs (gitignored, shared via Support_Resistance/data)
+  reference_levels.txt          # manual S/R ground-truth used by research/compare.py
+  FILTER_CATALOG.md             # walk-forward filter validation reference
+  PROJECT.md                    # this file
+  requirements.txt
+```
+
+## Keeping core/ in sync with sr-dashboard
+
+```bash
+# verify core/ is identical
+diff -rq core/ ../sr-dashboard/core/
+
+# pull sr-dashboard's core/ on top (after committing local work first)
+rsync -a --exclude='__pycache__' --delete ../sr-dashboard/core/ core/
+```
+
+A change accepted in either repo's `core/` should be propagated to the other
+in the same PR. Treat divergence as a bug.
+
+## Comparing outputs against sr-dashboard
+
+Both repos can call the same `analyze_token()` → `compute_tp_sl()` →
+`output_json()` chain. To diff:
+
+```bash
+# in sr-dashboard
+python3 main.py --tokens BTC ETH SOL --skip-charts --skip-llm
+
+# in Support_Resistance — write a tiny harness that calls the same
+# functions and dumps to output/rank_output.json, then:
+diff <(jq -S . ../sr-dashboard/output/rank_output.json) \
+     <(jq -S . output/rank_output.json)
+```
+
+## Stale research scripts (known broken, patch on revival)
+
+These scripts were already drifted out of sync with `core/` before this repo
+was reorganised. They fail at import because they reference symbols that no
+longer exist (`compute_token_score`, `MTF_REGIME_CONFIG`, `FALLBACK_TOP_50`).
+None of them block anything else — they're parked for resurrection if the
+underlying experiment becomes interesting again.
+
+- `research/backtest.py`
+- `research/backtest_mtf.py`
+- `research/backtest_portfolio.py`
+- `research/backtest_roro.py`
+- `research/mtf_structure.py`
+
+To revive: rename `compute_token_score` → `compute_tp_sl` and adapt the call
+site to the current 1-arg signature; rebuild whatever `MTF_REGIME_CONFIG` /
+`FALLBACK_TOP_50` constants are needed locally.
+
+## Quick start
 
 ```bash
 pip install -r requirements.txt
 
-# 1. Generate the raw signal log (one row per qualifying setup, every filter as a column)
-python3 backtest_model.py --all --days 1000
+# Validate detector levels against manual reference
+python3 research/compare.py
 
-# 2. Pick a filter combo and produce the report (Markdown + tearsheet PDF)
-python3 report.py --filters btc_rsi di_bull bb_pctb --tier all --target r1 --timeout 7
+# Visualise per-detector levels on a price chart
+python3 research/diagnose_detectors.py BTC
 
-# 3. (Optional) Brute-force the best combo for a tier
-python3 report.py --search --tier top_20 --max-filters 4
+# Scan multi-token regimes
+python3 research/scan_regimes.py
+
+# Record signal log for filter analysis
+python3 research/backtest_model.py --all --days 1000
 ```
-
-## What It Does
-
-Detects tradeable support and resistance zones by running 5 independent detection methods across 3 timeframes (20d/60d/180d), merging results with strength-weighted pricing, and validating entry signals through walk-forward backtested filters. Produces ranked trade setups with TP/SL levels and risk-reward scoring, plus a backtest workflow for filter selection.
-
-## Architecture
-
-```
-Support_Resistance/
-  core/                         -- production engine (S/R detection + filters + TP/SL)
-    config.py                   -- central configuration (all tuneable params)
-    models.py                   -- shared dataclasses (SRLevel, SRZone, compute_atr)
-    sr_analysis.py              -- main orchestrator (multi-window ensemble + zone conversion)
-    fetcher.py                  -- multi-source OHLCV fetcher (Binance, GeckoTerminal, CoinGecko)
-    filters.py                  -- 8 entry filters + FilterChain
-    tpsl.py                     -- take-profit / stop-loss calculation + R:R scoring
-    detectors/                  -- 5 independent S/R detection methods
-      ensemble.py               -- orchestrator (runs all 5, merges with strength weighting)
-      market_structure.py       -- body/wick swing detection + break invalidation (40% weight)
-      touch_count.py            -- weighted touch frequency counting (25% weight)
-      nison_body.py             -- large candle body edges / institutional footprints (15% weight)
-      volume_profile.py         -- VPVR-style high-volume node detection (10% weight)
-      polarity_flip.py          -- support <-> resistance role reversal detection (10% weight)
-
-  backtest_model.py             -- signal recorder: writes backtest_results.csv
-                                   (one row per qualifying setup, every filter state as a boolean column)
-  report.py                     -- unified report generator: reads backtest_results.csv,
-                                   simulates a chosen filter combo, computes metrics
-                                   (sharpe, sortino, calmar, max DD, profit factor, hit rate),
-                                   outputs Markdown + tearsheet PDF
-  compare.py                    -- validate detector S/R levels against external sources
-                                   (Grok / Perplexity / manual reference_levels.txt)
-  diagnose_detectors.py         -- per-detector visualisation on price chart (debugging tool)
-  roro_features.py              -- 7 risk-on/risk-off market features
-
-  data/                         -- cached OHLCV CSVs (gitignored)
-  data49/                       -- 49-token validated universe snapshot (gitignored)
-
-  FILTER_CATALOG.md             -- canonical filter reference + walk-forward results
-  PROJECT.md                    -- this file
-  reference_levels.txt          -- manual S/R reference (used by compare.py)
-  backtest_results.csv          -- latest signal log from backtest_model.py
-  sr_backtest_report.md         -- latest report (Markdown)
-  sr_backtest_report.pdf        -- latest report (tearsheet PDF)
-```
-
-## Data Flow
-
-```
-                fetcher.py
-                    │
-                    ▼
-             daily OHLCV (cached in data/)
-                    │
-                    ▼
-           sr_analysis.py
-       (3 windows × 5 detectors → ensemble → zones)
-                    │
-                    ▼
-              tpsl.py
-       (nearest R / nearest S → cascade → R:R)
-                    │
-                    ▼
-        backtest_model.py
-   (records EVERY qualifying signal × ALL filter states)
-                    │
-                    ▼
-        backtest_results.csv     ←── ground-truth signal log
-                    │
-                    ▼
-              report.py
-  (apply filter combo → simulate → metrics → tearsheet)
-                    │
-                    ▼
-   sr_backtest_report.md  +  sr_backtest_report.pdf
-```
-
-## 5-Method Ensemble
-
-| Method | Weight | What it detects |
-|---|---|---|
-| Market Structure | 40% | Body/wick swings, break invalidation, CHOCH/BOS structural roles |
-| Touch Count | 25% | Weighted price touches at levels (body > open > wick weighting) |
-| Nison Body | 15% | Large candle body edges (institutional footprints, >= 1 ATR) |
-| Volume Profile | 10% | VPVR high-volume nodes, Point of Control, Value Area |
-| Polarity Flip | 10% | Levels that flipped from support to resistance or vice versa |
-
-Levels from all methods are merged within 0.5% proximity using strength-weighted pricing. Multi-method bonus: +10% per additional confirming method (cap 30%).
-
-## Entry Filters
-
-| Alias (CLI) | Rule | Purpose |
-|---|---|---|
-| `btc_rsi` | BTC RSI(10) >= 50 | Market-wide risk gate |
-| `tok_rsi` | Token RSI(10) > 60 | Momentum confirmation |
-| `adx` | ADX(14) > 20 | Trend must exist |
-| `di_bull` | DI+ > DI- | Bullish directional pressure |
-| `mt_regime` | SMA(40) regime != DOWN | Block downtrends |
-| `bb_pctb` | BB %B < 0.80 | Block overbought |
-| `rvol` | RVOL(20) >= 1.5 | Volume confirmation |
-| `rsi_cap` | RSI(10) <= 80 | Overbought protection |
-| `rr_min` | R:R >= 1.2 | Minimum risk/reward |
-
-All filters validated via 6-month in-sample / 6-month out-of-sample walk-forward folds. See [FILTER_CATALOG.md](FILTER_CATALOG.md) for full results, recommended combos per tier, and filter interaction analysis.
-
-## Configuration
-
-All tuneable parameters are in `core/config.py`:
-
-- **Multi-timeframe windows:** 20d (weight 1.5), 60d (weight 1.0), 180d (weight 0.7)
-- **Detector configs:** per-window settings for each detection method
-- **Zone thresholds:** merge distance, ATR multipliers, tier classification rules
-- **TP/SL rules:** ATR cascade for nearby levels
-- **Token universe:** four tiers — `top_3`, `selected`, `top_20`, `all` (defined in `core/config.py`)
-
-## Key Design Patterns
-
-- **ATR-normalised thresholds** — all distances and tolerances expressed as ATR multiples.
-- **Exponential recency decay** — `exp(-ln(2) * bars_ago / halflife)`, configurable per window.
-- **Body-first anchor snapping** — zones snap to large candle bodies (institutional levels) over wicks.
-- **Strength-weighted pricing** — merged level price pulled toward stronger constituents.
-- **Decoupled signal log → report** — `backtest_model.py` records *all* signals once with every filter state as a boolean column; `report.py` slices that log by any filter combination without re-running the engine. Borrowed from `python_backtester`'s signal/engine separation.
-- **Single-position compounding** — `report.py` simulates one trade at a time at 100% capital, compounding equity on each exit.
-
-## Outputs
-
-- **backtest_model.py** → `backtest_results.csv`: one row per qualifying setup, with filter states, TP/SL/timeout outcomes, and look-ahead-free exit prices at days 5/7/10/14/21.
-- **report.py** → `sr_backtest_report.md` (table summary) + `sr_backtest_report.pdf` (tearsheet: equity curve, drawdown, monthly heatmap, metrics tables, per-symbol breakdown).
-- **diagnose_detectors.py** → matplotlib chart with each detector's levels overlaid on price.
-- **compare.py** → console table scoring detectors vs Grok/Perplexity/manual reference.
 
 ## Dependencies
 
 ```
-numpy>=1.24
-pandas>=2.0
-scipy>=1.11
-requests>=2.31
-matplotlib>=3.8
+numpy, pandas, scipy, requests        # core engine
+matplotlib, mplfinance                # research/diagnose_detectors.py + research/mtf_structure.py
 ```
 
-Optional: `mplfinance` (for `diagnose_detectors.py`).
+No FastAPI, no LLM, no chart pipeline — those live in sr-dashboard.
+
+## Data
+
+`data/` holds cached daily OHLCV CSVs (109 tokens at the time of writing).
+Fetcher logic lives in `core/fetcher.py` and is shared with sr-dashboard, so
+both repos can populate the same cache layout. To repopulate from scratch
+without sr-dashboard:
+
+```python
+from core.fetcher import fetch_and_cache
+fetch_and_cache("BTC", days=730, data_dir="data")
+```

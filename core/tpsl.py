@@ -1,16 +1,11 @@
 """
-TPSL — Take-Profit / Stop-Loss computation.
+TPSL — Take-Profit / Stop-Loss and S/R quality scoring.
 =========================================================
-Simple cascade rules:
-  TP = walk resistances nearest-first; cascade through any within 1 ATR;
-       break on the first level >= 1 ATR away. If all are within 1 ATR,
-       keep the farthest. If the final pick is < 0.5 ATR away, return None.
-  SL = symmetric on the support side.
-  RR = (TP - price) / (price - SL), only when both sides are usable.
+Simple rules:
+  TP = nearest resistance (cascade to next if within 1 ATR of price)
+  SL = nearest support (cascade to next if within 1 ATR of price)
+  RR = (TP - price) / (price - SL)
 
-Partial setups (one side None) are still returned with `qualified=True`
-so the UI can render the available structure; only setups with NO usable
-side are excluded.
 """
 
 import json
@@ -18,9 +13,8 @@ import numpy as np
 from typing import List, Optional
 from datetime import datetime, timezone
 
-
-from core.models import fmt_price
 from core import config
+from core.models import fmt_price
 
 
 class NumpySafeEncoder(json.JSONEncoder):
@@ -40,13 +34,10 @@ def compute_tp_sl(analysis: dict) -> Optional[dict]:
     """
     Compute TP, SL, and R:R for one token.
 
-    Cascade rules:
-      TP = walk resistances nearest-first. Always update tp as we cascade
-           past levels within 1 ATR. Break on the first level >= 1 ATR
-           away. If all are within 1 ATR, keep the farthest.
-      SL = symmetric on the support side.
-      If the final pick is < 0.5 ATR from price, set that side to None
-      (we never fabricate a synthetic price ± atr level).
+    Rules:
+      TP = nearest resistance. If within 1 ATR → cascade to next.
+      SL = nearest support. If within 1 ATR → cascade to next.
+      RR = (TP - price) / (price - SL)
     """
     symbol = analysis.get("symbol", "???")
     price = analysis.get("price")
@@ -133,8 +124,9 @@ def compute_tp_sl(analysis: dict) -> Optional[dict]:
         "potential_gain_abs": gain_abs,
         "potential_loss_abs": loss_abs,
         "raw_rr": raw_rr,
-        # qualified=True when at least one cascade side is tradeable.
-        # Frontend renders "—" for any side that is None.
+        # qualified=True when at least one cascade side is tradeable. The
+        # frontend renders "—" for any side that is None and excludes
+        # partial setups from preset modes (no-filter still shows them).
         "qualified": qualified,
         "reason": reason,
         "market_structure": ms,

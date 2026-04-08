@@ -1,13 +1,14 @@
 """
 Data Fetcher — Download & cache daily OHLCV data.
 ===================================================
-Fetches from Binance (primary), GeckoTerminal (DEX), CoinGecko (fallback).
+Fetches from Binance (primary), MEXC, GeckoTerminal (DEX), CoinGecko (fallback).
 Supports caching with incremental updates.
 
 Usage:
     from core.fetcher import fetch_data, load_from_cache, fetch_and_cache
 """
 
+import logging
 import os
 import sys
 import time
@@ -190,60 +191,8 @@ def fetch_hyperliquid(symbol: str, days: int = 180) -> Optional[pd.DataFrame]:
         return None
 
 
-def fetch_coingecko(symbol: str, days: int = 180) -> Optional[pd.DataFrame]:
-    """Fetch daily OHLC from CoinGecko free API."""
-    coin_id = config.COINGECKO_ID_MAP.get(symbol.upper(), symbol.lower())
-
-    valid_days = [365, 180, 90, 30, 14, 7, 1]
-    cg_days = 365
-    for vd in valid_days:
-        if days >= vd:
-            cg_days = vd
-            break
-
-    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc"
-    params = {"vs_currency": "usd", "days": str(cg_days)}
-
-    try:
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        if not data or not isinstance(data, list):
-            return None
-
-        rows = [{
-            "timestamp": pd.to_datetime(c[0], unit="ms", utc=True),
-            "open": float(c[1]), "high": float(c[2]),
-            "low": float(c[3]), "close": float(c[4]),
-        } for c in data]
-
-        df = pd.DataFrame(rows).set_index("timestamp")
-
-        # Fetch volume separately
-        try:
-            mkt_url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
-            mkt_resp = requests.get(mkt_url, params={"vs_currency": "usd", "days": str(days)}, timeout=10)
-            mkt_data = mkt_resp.json()
-            if "total_volumes" in mkt_data:
-                vol_df = pd.DataFrame(mkt_data["total_volumes"], columns=["ts", "volume"])
-                vol_df["timestamp"] = pd.to_datetime(vol_df["ts"], unit="ms", utc=True)
-                vol_df = vol_df.set_index("timestamp").resample("1D").sum()
-                df = df.resample("1D").agg({
-                    "open": "first", "high": "max", "low": "min", "close": "last"
-                }).dropna()
-                df = df.join(vol_df["volume"], how="left")
-                df["volume"] = df["volume"].fillna(1.0)
-        except Exception:
-            df["volume"] = 1.0
-
-        return df
-    except Exception as e:
-        print(f"[CoinGecko] Failed for {coin_id}: {e}", file=sys.stderr)
-        return None
-
-
 def fetch_data(symbol: str, days: int = 180) -> pd.DataFrame:
-    """Auto-detect: Binance → MEXC → Hyperliquid → GeckoTerminal → CoinGecko."""
+    """Auto-detect: Binance → MEXC → GeckoTerminal → CoinGecko."""
     print(f"[{symbol}] Fetching data...", file=sys.stderr)
 
     df = fetch_binance(symbol, days)
@@ -272,33 +221,10 @@ def fetch_data(symbol: str, days: int = 180) -> pd.DataFrame:
             print(f"[{symbol}] GeckoTerminal OK — {len(df)} candles", file=sys.stderr)
             return df
 
-    print(f"[{symbol}] Trying CoinGecko fallback...", file=sys.stderr)
-    df = fetch_coingecko(symbol, days)
-    if df is not None and len(df) >= 30:
-        print(f"[{symbol}] CoinGecko OK — {len(df)} candles", file=sys.stderr)
-        return df
-
     raise RuntimeError(
-        f"Could not fetch data for {symbol} from Binance, MEXC, Hyperliquid, "
-        f"GeckoTerminal, or CoinGecko."
+        f"Could not fetch data for {symbol} from Binance, MEXC, Hyperliquid, or GeckoTerminal."
     )
 
-
-def fetch_from_csv(path: str) -> pd.DataFrame:
-    """Load OHLCV from a local CSV file."""
-    df = pd.read_csv(path)
-    df.columns = [c.lower().strip() for c in df.columns]
-    for col in ["timestamp", "date", "datetime", "time"]:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col])
-            df = df.set_index(col)
-            break
-    required = {"open", "high", "low", "close"}
-    if not required.issubset(set(df.columns)):
-        raise ValueError(f"CSV must have columns: {required}. Found: {set(df.columns)}")
-    if "volume" not in df.columns:
-        df["volume"] = 1.0
-    return df
 
 
 # ─────────────────────────────────────────────────────────────
@@ -329,7 +255,8 @@ def get_cache_status(symbol: str, data_dir: str) -> dict:
 
         return {"exists": True, "last_date": last_date, "missing_days": missing,
                 "fresh": fresh, "rows": len(df)}
-    except Exception:
+    except Exception as e:
+        logging.warning(f"Cache status error for {symbol}: {e}")
         return {"exists": True, "last_date": None, "missing_days": 999, "fresh": False}
 
 
@@ -359,7 +286,8 @@ def load_from_cache(symbol: str, data_dir: str) -> Optional[pd.DataFrame]:
         if "volume" not in df.columns:
             df["volume"] = 1.0
         return df
-    except Exception:
+    except Exception as e:
+        logging.warning(f"Failed to load cache for {symbol}: {e}")
         return None
 
 
@@ -382,7 +310,8 @@ def _fetch_incremental_binance(symbol: str, start_date, days_needed: int) -> Opt
             "low": float(c[3]), "close": float(c[4]), "volume": float(c[5]),
         } for c in data]
         return pd.DataFrame(rows).set_index("timestamp")
-    except Exception:
+    except Exception as e:
+        logging.warning(f"Incremental Binance fetch failed for {symbol}: {e}")
         return None
 
 
@@ -414,7 +343,7 @@ def fetch_and_cache(symbol: str, days: int, data_dir: str, force: bool = False) 
                 save_to_cache(combined, symbol, data_dir)
                 return "append"
 
-    # Full re-download: Binance → MEXC → Hyperliquid → GeckoTerminal → CoinGecko
+    # Full re-download: Binance → MEXC → Hyperliquid → GeckoTerminal
     df = fetch_binance(symbol, days)
     if df is None or len(df) < 30:
         time.sleep(0.5)
@@ -433,13 +362,29 @@ def fetch_and_cache(symbol: str, days: int, data_dir: str, force: bool = False) 
         df = fetch_geckoterminal(symbol, days)
 
     if df is None or len(df) < 30:
-        time.sleep(1.5)
-        df = fetch_coingecko(symbol, days)
-
-    if df is None or len(df) < 30:
         return "failed"
 
+    # Merge with existing cache so non-Binance histories accumulate over time.
+    # Binance tokens already grow via _fetch_incremental_binance; MEXC /
+    # Hyperliquid / GeckoTerminal tokens were capped at whatever the fetcher
+    # returns per call (typically ~180 candles). Merging preserves older
+    # history beyond that window.
+    cached = load_from_cache(symbol, data_dir)
+    if cached is not None and len(cached) > 0:
+        combined = pd.concat([cached, df])
+        combined = combined[~combined.index.duplicated(keep="last")]
+        combined.sort_index(inplace=True)
+        df = combined
+
     save_to_cache(df, symbol, data_dir)
+
+    if len(df) < config.MIN_USEFUL_CANDLES:
+        print(
+            f"[{symbol}] WARNING low_history n={len(df)} (<{config.MIN_USEFUL_CANDLES}) — "
+            f"only the 20d S/R window will run; output is unreliable",
+            file=sys.stderr,
+        )
+
     return "full"
 
 
@@ -476,7 +421,7 @@ def get_top_tokens(target: int = 50) -> List[str]:
         data = resp.json()
     except Exception as e:
         print(f"[CoinGecko] Failed to fetch market cap list: {e}", file=sys.stderr)
-        return config.FALLBACK_TOP_50[:target]
+        return config.get_all_tokens()[:target]
 
     candidates = []
     seen = set()
@@ -521,15 +466,8 @@ def get_top_tokens(target: int = 50) -> List[str]:
 
     tokens = validated[:target]
 
-    # Always include pinned tokens
-    existing = set(tokens)
-    for sym in sorted(config.ALWAYS_INCLUDE):
-        if sym not in existing:
-            tokens.append(sym)
-            print(f"  + {sym} (pinned via ALWAYS_INCLUDE)", file=sys.stderr)
-
     if len(tokens) < target // 2:
         print(f"  Only {len(tokens)} found — using fallback list", file=sys.stderr)
-        tokens = config.FALLBACK_TOP_50[:target]
+        tokens = config.get_all_tokens()[:target]
 
     return tokens

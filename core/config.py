@@ -150,12 +150,11 @@ def get_detector_config(days: int) -> dict:
     else:
         return DETECTOR_CONFIG_LONG
 
-# ── TPSL ─────────────────────────────────────────────────────
-
 # ── Data Fetching ────────────────────────────────────────────
 DEFAULT_DAYS = 180
 API_RATE_LIMIT_DELAY = 0.2    # seconds between API calls
 MAX_INCREMENTAL_DAYS = 30     # beyond this, full re-download
+MIN_USEFUL_CANDLES = 60       # smallest meaningful S/R window; warn below this
 
 # ── Symbol Mappings ──────────────────────────────────────────
 BINANCE_SYMBOL_MAP = {
@@ -181,12 +180,12 @@ BINANCE_SYMBOL_MAP = {
     "ZRO": "ZROUSDT", "ETHFI": "ETHFIUSDT", "MORPHO": "MORPHOUSDT",
     "CAKE": "CAKEUSDT", "PENGU": "PENGUUSDT", "DCR": "DCRUSDT",
     "JST": "JSTUSDT", "VIRTUAL": "VIRTUALUSDT", "NEXO": "NEXOUSDT",
-    "PUMP": "PUMPUSDT", "SKY": "SKYUSDT", "KAS": "KASUSDT", "MNT": "MNTUSDT",
+    "PUMP": "PUMPUSDT", "SKY": "SKYUSDT",
     # Legacy / less common
-    "OP": "OPUSDT", "MATIC": "MATICUSDT", "HYPE": "HYPEUSDT",
-    "BORG": "BORGUSDT", "ASTER": "ASTERUSDT",
+    "OP": "OPUSDT", "MATIC": "MATICUSDT",
+    "ASTER": "ASTERUSDT",
     "FLOKI": "FLOKIUSDT", "INJ": "INJUSDT", "IMX": "IMXUSDT",
-    "MKR": "MKRUSDT", "GRT": "GRTUSDT", "TIA": "TIAUSDT",
+    "GRT": "GRTUSDT", "TIA": "TIAUSDT",
     "WIF": "WIFUSDT", "DYDX": "DYDXUSDT", "PENDLE": "PENDLEUSDT",
     "ENS": "ENSUSDT", "LDO": "LDOUSDT", "CRV": "CRVUSDT",
     "COMP": "COMPUSDT", "SNX": "SNXUSDT", "RUNE": "RUNEUSDT",
@@ -194,10 +193,8 @@ BINANCE_SYMBOL_MAP = {
     "EOS": "EOSUSDT", "NEO": "NEOUSDT",
 }
 
-# Tokens routed to MEXC public klines (no Binance listing).
 MEXC_TOKENS = {"KAS", "MNT"}
 
-# Tokens routed to Hyperliquid info API (chain-native).
 HYPERLIQUID_TOKENS = {"HYPE"}
 
 GECKOTERMINAL_POOL_MAP = {
@@ -213,7 +210,7 @@ COINGECKO_ID_MAP = {
     "ARB": "arbitrum", "HYPE": "hyperliquid", "PAXG": "pax-gold",
     "NEAR": "near", "FET": "artificial-superintelligence-alliance",
     "RENDER": "render-token", "TAO": "bittensor", "LTC": "litecoin",
-    "BORG": "swissborg",
+    "BORG": "swissborg", "MNT": "mantle", "KAS": "kaspa",
 }
 
 # Tokens excluded from auto-discovery (stablecoins, wrapped, RWA, etc.)
@@ -234,59 +231,75 @@ COINGECKO_SYMBOL_FIX = {
     "matic-network": "MATIC",
 }
 
-# Tokens always included regardless of market cap rank
-ALWAYS_INCLUDE = {"BORG"}
+# ── Token Tiers (single source of truth = strategies.json) ───
+# Tier definitions live in strategies.json:tier_definitions and are loaded
+# lazily via the helpers below. The inclusive invariant
+#   top_3 ⊂ selected ⊂ top_20 ⊂ all
+# is enforced on every load — a violation raises RuntimeError.
 
-# ── Token Tier Lists (canonical source) ───────��──────────────
-TOP_3 = ["BTC", "ETH", "SOL"]
+import json as _json
+import os as _os
 
-SELECTED = [
-    "BTC", "ETH", "SOL", "HYPE", "BNB", "TAO", "DOGE", "NEAR", "SUI", "LINK",
-]
+_STRATEGIES_PATH = _os.path.join(
+    _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+    "strategies.json",
+)
 
-TOP_20 = [
-    "BTC", "ETH", "SOL", "BNB", "XRP", "TRX", "DOGE", "HYPE", "ADA", "LINK",
-    "XLM", "LTC", "HBAR", "AVAX", "SHIB", "TAO", "SUI", "TON", "PAXG", "MNT",
-]
-
-ALL = [
-    "BTC", "ETH", "SOL", "BNB", "XRP", "TRX", "DOGE", "HYPE", "ADA", "LINK",
-    "XLM", "LTC", "HBAR", "AVAX", "SHIB", "TAO", "SUI", "TON", "PAXG", "MNT",
-    "UNI", "DOT", "SKY", "ASTER", "NEAR", "AAVE", "PEPE", "ONDO", "ICP", "POL",
-    "KAS", "RENDER", "WLD", "QNT", "ATOM", "FIL", "ARB", "FET", "APT", "TRUMP",
-    "ALGO", "INJ", "ENA", "VET", "BONK", "SEI", "STX", "JUP", "FLOKI", "MKR",
-    "OP", "BORG",
-]
-
-TOKEN_TIERS = {
-    "top_3": TOP_3,
-    "selected": SELECTED,
-    "top_20": TOP_20,
-    "all": ALL,
-}
-
-# Convenience sets for membership tests
-TOP_3_SET = set(TOP_3)
-SELECTED_SET = set(SELECTED)
-TOP_20_SET = set(TOP_20)
-ALL_SET = set(ALL)
+_TIER_KEYS = ("top_3", "selected", "top_20", "all")
 
 
-def get_tier(symbol: str) -> str:
-    """Return the most specific tier a token belongs to."""
-    if symbol in TOP_3_SET:
-        return "top_3"
-    if symbol in SELECTED_SET:
-        return "selected"
-    if symbol in TOP_20_SET:
-        return "top_20"
-    if symbol in ALL_SET:
-        return "all"
-    return "unknown"
+def load_tier_definitions() -> dict:
+    """Load tier_definitions from strategies.json and validate inclusivity.
+
+    Returns: {"top_3": [...], "selected": [...], "top_20": [...], "all": [...]}
+    Raises: RuntimeError if any tier is missing or the inclusive invariant fails.
+    """
+    with open(_STRATEGIES_PATH) as f:
+        data = _json.load(f)
+    raw = data.get("tier_definitions") or {}
+    tiers = {}
+    for k in _TIER_KEYS:
+        node = raw.get(k)
+        if not node or "tokens" not in node:
+            raise RuntimeError(
+                f"strategies.json:tier_definitions missing required tier '{k}'"
+            )
+        tiers[k] = list(node["tokens"])
+
+    sets = {k: set(v) for k, v in tiers.items()}
+    if not (sets["top_3"] <= sets["selected"]):
+        missing = sorted(sets["top_3"] - sets["selected"])
+        raise RuntimeError(
+            f"tier invariant broken: top_3 ⊄ selected (missing {missing})"
+        )
+    if not (sets["selected"] <= sets["top_20"]):
+        missing = sorted(sets["selected"] - sets["top_20"])
+        raise RuntimeError(
+            f"tier invariant broken: selected ⊄ top_20 (missing {missing})"
+        )
+    if not (sets["top_20"] <= sets["all"]):
+        missing = sorted(sets["top_20"] - sets["all"])
+        raise RuntimeError(
+            f"tier invariant broken: top_20 ⊄ all (missing {missing})"
+        )
+    return tiers
 
 
-# Backward compat alias (used by fetcher.py fallback)
-FALLBACK_TOP_50 = ALL
+def get_token_groups() -> dict:
+    """Return UI-friendly group dict (TOP 3 / SELECTED / TOP 20 / ALL)
+    derived from strategies.json. Used by /api/groups."""
+    tiers = load_tier_definitions()
+    return {
+        "TOP 3": tiers["top_3"],
+        "SELECTED": tiers["selected"],
+        "TOP 20": tiers["top_20"],
+        "ALL": tiers["all"],
+    }
+
+
+def get_all_tokens() -> list:
+    """Return the 'all' tier token list — the live universe."""
+    return load_tier_definitions()["all"]
 
 # ── LLM Report Generation ───────────────────────────────────
 LLM_MODEL = "claude-sonnet-4-20250514"

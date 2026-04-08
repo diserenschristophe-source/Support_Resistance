@@ -1,0 +1,6 @@
+# Manual S/R Reference Levels
+# Format: SYMBOL: support1 support2 | resistance1 resistance2 resistance3
+
+BTC: 65700 60000 | 75970 79300 90570
+ETH: 1930 1750 | 2380 2740
+SOL: 76 64.5 | 95 117

@@ -17,7 +17,7 @@ All filters accept a DataFrame with OHLCV data and return:
 
 import numpy as np
 import pandas as pd
-from typing import List, Tuple, Callable, Optional
+from typing import List, Tuple, Optional
 
 
 # ── Indicator helpers ────────────────────────────────────────
@@ -121,16 +121,6 @@ def token_rsi_momentum(df: pd.DataFrame, period: int = 10,
     return False, f"RSI({period})={rsi:.1f} <= {threshold}"
 
 
-def rsi_cap(df: pd.DataFrame, period: int = 10,
-            threshold: float = 80.0,
-            **kwargs) -> Tuple[bool, str]:
-    """Token RSI(10) <= threshold — avoid exhaustion / overbought entries."""
-    rsi = compute_rsi(df["close"], period)
-    if rsi <= threshold:
-        return True, ""
-    return False, f"RSI({period})={rsi:.1f} > {threshold} (overbought)"
-
-
 def token_di_bullish(df: pd.DataFrame, period: int = 14,
                      **kwargs) -> Tuple[bool, str]:
     """Token DI+ > DI- — trend is bullish."""
@@ -142,33 +132,27 @@ def token_di_bullish(df: pd.DataFrame, period: int = 14,
     return False, f"DI+={di_plus:.1f} <= DI-={di_minus:.1f} (bearish)"
 
 
-def min_risk_reward(df: pd.DataFrame, raw_rr: float = 0.0,
+def min_risk_reward(df: pd.DataFrame, raw_rr=None,
                     threshold: float = 1.2,
                     **kwargs) -> Tuple[bool, str]:
     """R:R ratio >= threshold — minimum risk/reward to qualify.
 
-    raw_rr must be passed as a kwarg (computed by TPSL module).
+    `raw_rr` is the TPSL-computed R:R, passed as a kwarg by main.py.
+    May be None when the cascade returned a partial setup (TP or SL is None).
+    Treat None as "not computable" → filter does not pass.
     """
+    if raw_rr is None:
+        return False, "R:R not computable (partial setup)"
     if raw_rr >= threshold:
         return True, ""
     return False, f"R:R={raw_rr:.2f} < {threshold}"
 
 
-# ── MT SMA Regime Filter ────────────────────────────────────
-# Single-timeframe regime filter using SMA40 + slope over 20 bars.
-# Filter blocks entries when regime is D (downtrend: price < SMA AND SMA falling).
-#
-# Walk-forward validated on 5y data (BTC, ETH, SOL), 12m IS / 6m OOS:
-#   - SMA40 / slope 20 / confirm 1 beat all MTF combos
-#   - Cuts max drawdown ~15% while preserving returns
-#   - Strongest edge on ETH (+24% vs +5% no gate)
-#
-# Regime states:
-#   U (Up):    price > SMA40 AND SMA40 rising over 20 bars
-#   D (Down):  price < SMA40 AND SMA40 falling over 20 bars
+# ── MTF SMA Regime Gate ─────────────────────────────────────
+# Detects regime on 3 timeframes using price position + SMA slope:
+#   U (Up):   price > SMA AND SMA rising
+#   D (Down): price < SMA AND SMA falling
 #   T (Trans): price and slope disagree
-
-MT_REGIME_CONFIG = {"sma": 40, "slope_bars": 20, "confirm": 1}
 
 
 def _raw_regime(close: pd.Series, sma: pd.Series, slope_bars: int) -> pd.Series:
@@ -234,52 +218,13 @@ def detect_regime_series(close: pd.Series, sma_period: int, slope_bars: int,
     return _apply_confirmation(raw, confirm_bars)
 
 
-def compute_mt_regime(close: pd.Series) -> Tuple[str, str]:
-    """Compute the MT regime from a close price series.
 
-    Returns (regime_state, description).
+def compute_regime_sma40(close: pd.Series) -> str:
+    """Single-timeframe regime indicator using SMA(40), slope 20, confirm 1.
+
+    Returns "U", "D", or "T".
     """
-    cfg = MT_REGIME_CONFIG
-    state = detect_regime(close, cfg["sma"], cfg["slope_bars"], cfg["confirm"])
-    return state, f"SMA{cfg['sma']} regime: {state}"
-
-
-def mt_regime(df: pd.DataFrame, **kwargs) -> Tuple[bool, str]:
-    """MT SMA regime filter — blocks entries when regime is D (downtrend).
-
-    Uses SMA40 with slope measured over 20 bars, no confirmation delay.
-    Passes when regime is U (uptrend) or T (transition).
-    Fails when regime is D (price < SMA40 AND SMA40 falling).
-    """
-    state, desc = compute_mt_regime(df["close"])
-    if state != "D":
-        return True, ""
-    return False, f"MT regime D ({desc})"
-
-
-# ── Relative Volume Filter ─────────────────────────────────
-# Confirms that volume backs the price move.
-#
-# Walk-forward validated on 49 tokens:
-#   - RVOL 1.5-2.0x is the sweet spot for breakout follow-through
-#   - Below 1.5x: insufficient conviction behind the move
-
-def relative_volume(df: pd.DataFrame, period: int = 20,
-                    threshold: float = 1.5, **kwargs) -> Tuple[bool, str]:
-    """Relative volume >= threshold — volume confirms the move.
-
-    RVOL = current volume / SMA(volume, period).
-    """
-    vol = df["volume"]
-    if len(vol) < period + 1:
-        return True, ""  # not enough data, pass
-    avg_vol = vol.iloc[-(period+1):-1].mean()
-    if avg_vol == 0:
-        return True, ""
-    rvol = float(vol.iloc[-1] / avg_vol)
-    if rvol >= threshold:
-        return True, ""
-    return False, f"RVOL={rvol:.2f} < {threshold}"
+    return detect_regime(close, sma_period=40, slope_bars=20, confirm_bars=1)
 
 
 # ── Filter registry ─────────────────────────────────────────
@@ -287,11 +232,8 @@ def relative_volume(df: pd.DataFrame, period: int = 20,
 AVAILABLE_FILTERS = {
     "btc_rsi_floor": btc_rsi_floor,
     "token_rsi_momentum": token_rsi_momentum,
-    "rsi_cap": rsi_cap,
     "token_di_bullish": token_di_bullish,
     "min_risk_reward": min_risk_reward,
-    "mt_regime": mt_regime,
-    "relative_volume": relative_volume,
 }
 
 
@@ -339,3 +281,64 @@ class FilterChain:
             results[name] = {"passed": passed, "reason": reason}
         all_passed = all(r["passed"] for r in results.values())
         return {"passed": all_passed, "filters": results}
+
+
+# ── New filters (v2) ────────────────────────────────────────
+
+def rsi_cap(df: pd.DataFrame, period: int = 10,
+            threshold: float = 80.0,
+            **kwargs) -> Tuple[bool, str]:
+    """Token RSI(10) <= threshold — avoid exhaustion."""
+    rsi = compute_rsi(df["close"], period)
+    if rsi <= threshold:
+        return True, ""
+    return False, f"RSI({period})={rsi:.1f} > {threshold} (overbought)"
+
+
+def relative_volume(df: pd.DataFrame, period: int = 20,
+                    threshold: float = 1.5,
+                    **kwargs) -> Tuple[bool, str]:
+    """RVOL(20) >= threshold — volume confirms the move."""
+    vol = df["volume"]
+    if len(vol) < period:
+        return True, ""
+    avg_vol = vol.rolling(period).mean().iloc[-1]
+    if avg_vol <= 0:
+        return True, ""
+    rvol = vol.iloc[-1] / avg_vol
+    if rvol >= threshold:
+        return True, ""
+    return False, f"RVOL={rvol:.2f} < {threshold} (low volume)"
+
+
+def mt_regime_gate(df: pd.DataFrame, **kwargs) -> Tuple[bool, str]:
+    """SMA40 regime gate — block entries in confirmed downtrends.
+
+    Single-timeframe: SMA(40), slope over 20 bars, 1 confirmation bar.
+    Gate OFF when regime is D (down). ON when U (up) or T (transition).
+    """
+    regime = compute_regime_sma40(df["close"])
+    if regime != "D":
+        return True, ""
+    return False, f"Regime=D (SMA40 downtrend)"
+
+
+# ── Indicator value helpers (for dashboard) ─────────────────
+
+def compute_rvol(volume: pd.Series, period: int = 20) -> float:
+    """Compute relative volume."""
+    if len(volume) < period:
+        return 1.0
+    avg_vol = volume.rolling(period).mean().iloc[-1]
+    if avg_vol <= 0:
+        return 1.0
+    return float(volume.iloc[-1] / avg_vol)
+
+
+# ── Update registry ─────────────────────────────────────────
+
+AVAILABLE_FILTERS.update({
+    "rsi_cap": rsi_cap,
+    "relative_volume": relative_volume,
+    "mt_regime_gate": mt_regime_gate,
+})

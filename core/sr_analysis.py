@@ -27,11 +27,7 @@ from core.detectors.ensemble import SRDetector
 
 
 def smart_round(val, price=None):
-    """Round to appropriate precision based on price magnitude.
-
-    `price` is an optional reference price (e.g. current price or key_level)
-    used to pick precision when `val` itself is small (e.g. a zone width).
-    """
+    """Round to appropriate precision based on price magnitude."""
     ref = abs(price) if price else abs(val)
     if ref == 0: return 0
     if ref >= 1000: return round(val)
