@@ -30,14 +30,23 @@ class NumpySafeEncoder(json.JSONEncoder):
 # TP / SL / RR Calculation
 # ─────────────────────────────────────────────────────────────
 
-def compute_tp_sl(analysis: dict) -> Optional[dict]:
+def _compute_tp_sl_impl(
+    analysis: dict,
+    tp_cascade_atr: float = 1.0,
+    sl_cascade_atr: float = 1.0,
+    tp_min_atr: float = 0.5,
+    sl_min_atr: float = 0.5,
+    flavour: str = "balanced",
+) -> Optional[dict]:
     """
-    Compute TP, SL, and R:R for one token.
+    Shared TP/SL engine.
 
-    Rules:
-      TP = nearest resistance. If within 1 ATR → cascade to next.
-      SL = nearest support. If within 1 ATR → cascade to next.
-      RR = (TP - price) / (price - SL)
+    Parameters control how aggressively the cascade skips near levels:
+      tp_cascade_atr – ATR multiplier to cascade past close resistances
+      sl_cascade_atr – ATR multiplier to cascade past close supports
+      tp_min_atr     – minimum ATR distance to keep a TP (else None)
+      sl_min_atr     – minimum ATR distance to keep a SL (else None)
+      flavour        – label stored in the result dict
     """
     symbol = analysis.get("symbol", "???")
     price = analysis.get("price")
@@ -50,42 +59,30 @@ def compute_tp_sl(analysis: dict) -> Optional[dict]:
     atr = ms.get("atr14", 0)
 
     # ── Find TP: cascade through resistances (nearest-first) ──
-    # Walk resistances sorted nearest-first (ascending). Keep updating tp
-    # as we cascade past levels within 1 ATR of price.  Break on the first
-    # level that is >= 1 ATR away.  If ALL are within 1 ATR, keep the
-    # farthest (last one we saw).
     tp = None
     for r_zone in resistances:
         r_level = r_zone.get("key_level", 0)
         if r_level <= price:
             continue
-        tp = r_level                       # always update (cascade)
-        if (r_level - price) >= atr:
-            break                          # far enough — stop
+        tp = r_level
+        if (r_level - price) >= tp_cascade_atr * atr:
+            break
 
     # ── Find SL: cascade through supports (nearest-first) ──
-    # Supports are sorted descending (nearest-first).  Same logic: keep
-    # updating sl, break when distance >= 1 ATR.  If all within ATR, keep
-    # the farthest (lowest level).
     sl = None
     for s_zone in supports:
         s_level = s_zone.get("key_level", 0)
         if s_level >= price:
             continue
-        sl = s_level                       # always update (cascade)
-        if (price - s_level) >= atr:
-            break                          # far enough — stop
+        sl = s_level
+        if (price - s_level) >= sl_cascade_atr * atr:
+            break
 
-    # ── ATR distance: best-effort partial setup ──
-    # If the cascade exhausted into a level closer than 0.5 ATR, we DO NOT
-    # fabricate a synthetic `price ± atr` level (that misleads the trader),
-    # and we DO NOT disqualify the entire token (the trader still wants to
-    # see the structure). Instead we set the offending side to None so the
-    # UI displays "—". The other side, if usable, is preserved.
+    # ── ATR distance: discard levels too close ──
     if atr > 0:
-        if tp is not None and (tp - price) < 0.5 * atr:
+        if tp is not None and (tp - price) < tp_min_atr * atr:
             tp = None
-        if sl is not None and (price - sl) < 0.5 * atr:
+        if sl is not None and (price - sl) < sl_min_atr * atr:
             sl = None
 
     # ── R:R ── computable only when both sides are usable
@@ -106,13 +103,18 @@ def compute_tp_sl(analysis: dict) -> Optional[dict]:
         gain_abs = None
         loss_abs = None
 
-    # Qualified iff at least one side has a usable cascaded level. A token
-    # with both sides None has no tradeable structure at all.
-    has_any_side = tp is not None or sl is not None
-    qualified = has_any_side
+    has_both = tp is not None and sl is not None and sl < tp
+    qualified = has_both
     reason = None
-    if not has_any_side:
-        reason = "no usable structure (no TP and no SL)"
+    if not qualified:
+        if tp is None and sl is None:
+            reason = "no usable structure (no TP and no SL)"
+        elif tp is None:
+            reason = "no usable TP"
+        elif sl is None:
+            reason = "no usable SL"
+        else:
+            reason = "SL >= TP (invalid setup)"
 
     return {
         "symbol": symbol,
@@ -124,9 +126,7 @@ def compute_tp_sl(analysis: dict) -> Optional[dict]:
         "potential_gain_abs": gain_abs,
         "potential_loss_abs": loss_abs,
         "raw_rr": raw_rr,
-        # qualified=True when at least one cascade side is tradeable. The
-        # frontend renders "—" for any side that is None and excludes
-        # partial setups from preset modes (no-filter still shows them).
+        "flavour": flavour,
         "qualified": qualified,
         "reason": reason,
         "market_structure": ms,
@@ -136,6 +136,49 @@ def compute_tp_sl(analysis: dict) -> Optional[dict]:
         "resistance": resistances,
         "volume_profile": analysis.get("volume_profile"),
     }
+
+
+def compute_tp_sl(analysis: dict) -> Optional[dict]:
+    """Balanced TP/SL — cascade past levels within 1 ATR."""
+    return _compute_tp_sl_impl(
+        analysis,
+        tp_cascade_atr=1.0, sl_cascade_atr=1.0,
+        tp_min_atr=0.5, sl_min_atr=0.5,
+        flavour="balanced",
+    )
+
+
+def compute_tp_sl_conservative(analysis: dict) -> Optional[dict]:
+    """
+    Conservative TP/SL — prioritises capital preservation.
+
+    TP: accept the nearest viable resistance (0.5 ATR cascade) → smaller,
+        more achievable target.
+    SL: cascade further through supports (1.5 ATR) → wider stop, more room
+        to absorb volatility.
+    """
+    return _compute_tp_sl_impl(
+        analysis,
+        tp_cascade_atr=0.5, sl_cascade_atr=1.5,
+        tp_min_atr=0.3, sl_min_atr=0.75,
+        flavour="conservative",
+    )
+
+
+def compute_tp_sl_aggressive(analysis: dict) -> Optional[dict]:
+    """
+    Aggressive TP/SL — maximises reward-to-risk.
+
+    TP: skip minor resistances (2 ATR cascade) → targets bigger moves.
+    SL: accept the nearest viable support (0.5 ATR cascade) → tight stop,
+        cut losses fast.
+    """
+    return _compute_tp_sl_impl(
+        analysis,
+        tp_cascade_atr=2.0, sl_cascade_atr=0.5,
+        tp_min_atr=0.75, sl_min_atr=0.3,
+        flavour="aggressive",
+    )
 
 
 # ─────────────────────────────────────────────────────────────
