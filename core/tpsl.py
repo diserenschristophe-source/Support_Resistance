@@ -71,14 +71,18 @@ def score_resistance_permeability(resistance_zones: List[dict]) -> float:
 # TP / SL / RR Calculation
 # ─────────────────────────────────────────────────────────────
 
-def compute_tp_sl(analysis: dict) -> Optional[dict]:
+def _compute_tp_sl_core(analysis: dict, tp_atr_mult: float, sl_atr_mult: float) -> Optional[dict]:
     """
-    Compute TP, SL, and R:R for one token.
+    Core TP/SL computation with tuneable ATR cascade thresholds.
 
-    Rules:
-      TP = nearest resistance. If within 1 ATR → cascade to next.
-      SL = nearest support. If within 1 ATR → cascade to next.
-      RR = (TP - price) / (price - SL)
+    Parameters
+    ----------
+    tp_atr_mult : float
+        Minimum distance (in ATR multiples) a resistance must be from price
+        to qualify as TP.  Lower = take profit sooner.
+    sl_atr_mult : float
+        Minimum distance (in ATR multiples) a support must be from price
+        to qualify as SL.  Higher = wider stop, more breathing room.
     """
     symbol = analysis.get("symbol", "???")
     price = analysis.get("price")
@@ -90,11 +94,14 @@ def compute_tp_sl(analysis: dict) -> Optional[dict]:
     ms = analysis.get("market_structure", {})
     atr = ms.get("atr14", 0)
 
-    # ── Find TP: nearest resistance, cascade if within 1 ATR ──
+    tp_min_dist = atr * tp_atr_mult
+    sl_min_dist = atr * sl_atr_mult
+
+    # ── Find TP: nearest resistance, cascade if within tp_min_dist ──
     tp = None
     for r_zone in resistances:
         r_level = r_zone.get("key_level", 0)
-        if r_level > price and (r_level - price) >= atr:
+        if r_level > price and (r_level - price) >= tp_min_dist:
             tp = r_level
             break
     # Fallback: take any resistance above price even if close
@@ -105,11 +112,11 @@ def compute_tp_sl(analysis: dict) -> Optional[dict]:
                 tp = r_level
                 break
 
-    # ── Find SL: nearest support, cascade if within 1 ATR ──
+    # ── Find SL: nearest support, cascade if within sl_min_dist ──
     sl = None
     for s_zone in supports:
         s_level = s_zone.get("key_level", 0)
-        if s_level < price and (price - s_level) >= atr:
+        if s_level < price and (price - s_level) >= sl_min_dist:
             sl = s_level
             break
     # Fallback: take any support below price even if close
@@ -167,6 +174,28 @@ def compute_tp_sl(analysis: dict) -> Optional[dict]:
         "resistance": resistances,
         "volume_profile": analysis.get("volume_profile"),
     }
+
+
+def compute_tp_sl(analysis: dict) -> Optional[dict]:
+    """
+    Standard TP/SL: cascade past levels within 1 ATR of price.
+
+    TP = nearest resistance ≥ 1 ATR away.
+    SL = nearest support ≥ 1 ATR away.
+    """
+    return _compute_tp_sl_core(analysis, tp_atr_mult=1.0, sl_atr_mult=1.0)
+
+
+def compute_tp_sl_conservative(analysis: dict) -> Optional[dict]:
+    """
+    Conservative TP/SL — less aggressive targets, wider stops.
+
+    TP = nearest resistance above price (no ATR cascade — accepts close
+         levels, locking in profit sooner).
+    SL = nearest support ≥ 2 ATR away (wider stop, more breathing room,
+         fewer noise stop-outs).
+    """
+    return _compute_tp_sl_core(analysis, tp_atr_mult=0.0, sl_atr_mult=2.0)
 
 
 # ─────────────────────────────────────────────────────────────
