@@ -516,7 +516,7 @@ class ProfessionalSRAnalysis:
         raw_levels = deduped
 
         # Step 3: POC guarantee
-        if vp["poc"] and not any(abs(l.price - vp["poc"]) / max(l.price, 0.0001) < 0.02
+        if vp["poc"] and not any(abs(l.price - vp["poc"]) / max(l.price, 1e-12) < 0.02
                                   for l in raw_levels):
             t = "support" if vp["poc"] < self.current_price else "resistance"
             raw_levels.append(SRLevel(price=vp["poc"], level_type=t, strength=0.45,
@@ -628,7 +628,7 @@ class ProfessionalSRAnalysis:
         to_remove_res = set()
         for i, sz in enumerate(final_sup):
             for j, rz in enumerate(final_res):
-                if abs(sz.mid_price - rz.mid_price) / max(sz.mid_price, 0.0001) < merge_pct:
+                if abs(sz.mid_price - rz.mid_price) / max(sz.mid_price, 1e-12) < merge_pct:
                     s_score = self._zone_score(sz)
                     r_score = self._zone_score(rz)
                     if s_score >= r_score:

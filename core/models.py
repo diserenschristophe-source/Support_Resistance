@@ -44,8 +44,12 @@ def fmt_price(p: float) -> str:
         return f"${p:,.1f}"
     elif p >= 1:
         return f"${p:,.2f}"
-    else:
+    elif p >= 0.01:
         return f"${p:,.4f}"
+    elif p >= 0.0001:
+        return f"${p:,.6f}"
+    else:
+        return f"${p:,.8f}"
 
 
 @dataclass
