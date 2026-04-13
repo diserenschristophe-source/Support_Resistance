@@ -110,6 +110,9 @@ BACKFILL_WEAKNESS_FLOOR = 0.10   # min strength unless high touch count
 BACKFILL_MIN_TOUCHES_WEAK = 3    # min touches to include weak levels
 BACKFILL_MAX_DISTANCE = 0.50     # max distance from price (50%)
 
+# ── Final Level Spacing ─────────────────────────────────────
+MIN_LEVEL_SPACING_ATR = 0.75     # min spacing between selected levels in final output
+
 # ── Detector Defaults per Window ─────────────────────────────
 DETECTOR_CONFIG_SHORT = {
     "market_structure": {"swing_window": 3, "recency_halflife": 15},

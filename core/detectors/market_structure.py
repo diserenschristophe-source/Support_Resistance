@@ -248,9 +248,22 @@ class MarketStructureDetector:
         surviving = []
         flipped = []
 
+        # Shield the most recent confirmed swing of each type from
+        # premature invalidation.  Swing detection guarantees a real
+        # bounce (bars on both sides), so the newest low/high hasn't
+        # been structurally broken yet.
+        newest_low_idx = max((s["idx"] for s in swings if s["type"] == "low"), default=-1)
+        newest_high_idx = max((s["idx"] for s in swings if s["type"] == "high"), default=-1)
+
         for s in swings:
             start = s["idx"] + 1
             if start >= n:
+                s["break_count"] = 0.0
+                surviving.append(s)
+                continue
+
+            if (s["type"] == "low" and s["idx"] == newest_low_idx) or \
+               (s["type"] == "high" and s["idx"] == newest_high_idx):
                 s["break_count"] = 0.0
                 surviving.append(s)
                 continue

@@ -67,6 +67,8 @@ class SRLevel:
     anchor_type: str = ""    # 'body' or 'wick'
     anchor_candle_idx: int = -1
     structural_role: str = ""  # 'CHOCH', 'BOS', 'HL', 'HH', 'LH', 'LL', 'flip'
+    snap_price: float = 0.0       # actual candle price for chart display
+    snap_candle_idx: int = -1     # absolute index of that candle
 
     def __repr__(self):
         tf_str = ",".join(self.timeframes) if self.timeframes else "n/a"
