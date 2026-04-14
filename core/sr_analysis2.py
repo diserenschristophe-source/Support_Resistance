@@ -517,6 +517,26 @@ class ProfessionalSRAnalysis2:
             if not z.notes:
                 self._enrich_notes(z, fibs, structure)
 
+        # Cross-side dedup (ATR-based) — before _cap so it picks from clean zones
+        cross_dedup_dist = self.atr * 0.5
+        to_remove_sup = set()
+        to_remove_res = set()
+        for i, sz in enumerate(sup):
+            for j, rz in enumerate(res):
+                if abs(sz.mid_price - rz.mid_price) < cross_dedup_dist:
+                    if self._zone_score(sz) >= self._zone_score(rz):
+                        to_remove_res.add(j)
+                    else:
+                        to_remove_sup.add(i)
+        if to_remove_sup:
+            sup = [z for i, z in enumerate(sup) if i not in to_remove_sup]
+        if to_remove_res:
+            res = [z for i, z in enumerate(res) if i not in to_remove_res]
+
+        # Boundary guard
+        sup = [z for z in sup if z.key_level < self.current_price]
+        res = [z for z in res if z.key_level > self.current_price]
+
         # Cap to target: nearest level guaranteed, rest by score with spacing.
         def _cap(zones, n):
             min_spacing = self.atr * config.MIN_LEVEL_SPACING_ATR
@@ -536,44 +556,14 @@ class ProfessionalSRAnalysis2:
         sup = _cap(sup, target)
         res = _cap(res, target)
 
-        # Step 9: Final boundary guard
-        final_sup = [z for z in sup if z.key_level < self.current_price]
-        final_res = [z for z in res if z.key_level > self.current_price]
-        for z in sup:
-            if z.key_level >= self.current_price and z not in final_res:
-                z.zone_type = "resistance"
-                final_res.append(z)
-        for z in res:
-            if z.key_level <= self.current_price and z not in final_sup:
-                z.zone_type = "support"
-                final_sup.append(z)
-
-        # Step 10: Cross-side dedup (ATR-based)
-        cross_dedup_dist = self.atr * 0.5
-        to_remove_sup = set()
-        to_remove_res = set()
-        for i, sz in enumerate(final_sup):
-            for j, rz in enumerate(final_res):
-                if abs(sz.mid_price - rz.mid_price) < cross_dedup_dist:
-                    s_score = self._zone_score(sz)
-                    r_score = self._zone_score(rz)
-                    if s_score >= r_score:
-                        to_remove_res.add(j)
-                    else:
-                        to_remove_sup.add(i)
-        if to_remove_sup:
-            final_sup = [z for i, z in enumerate(final_sup) if i not in to_remove_sup]
-        if to_remove_res:
-            final_res = [z for i, z in enumerate(final_res) if i not in to_remove_res]
-
-        # Step 11: TA-friendly display rounding (after all calculations)
-        for z in final_sup + final_res:
+        # TA-friendly display rounding (after all calculations)
+        for z in sup + res:
             z.key_level = ta_round(z.key_level, self.current_price)
 
         return {"market_structure": structure, "volume_profile": vp,
-                "support_zones": final_sup, "resistance_zones": final_res,
+                "support_zones": sup, "resistance_zones": res,
                 "fibonacci": fibs,
-                "summary": self._build_summary(structure, vp, final_sup, final_res)}
+                "summary": self._build_summary(structure, vp, sup, res)}
 
     def _backfill_levels(self, bias, existing_sup, existing_res):
         """Run V2 ensemble on full data and convert levels not already covered."""
