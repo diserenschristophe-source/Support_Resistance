@@ -548,13 +548,13 @@ class ProfessionalSRAnalysis2:
                 z.zone_type = "support"
                 final_sup.append(z)
 
-        # Step 10: Cross-side dedup
-        merge_pct = config.MERGE_THRESHOLD_PCT
+        # Step 10: Cross-side dedup (ATR-based)
+        cross_dedup_dist = self.atr * 0.5
         to_remove_sup = set()
         to_remove_res = set()
         for i, sz in enumerate(final_sup):
             for j, rz in enumerate(final_res):
-                if abs(sz.mid_price - rz.mid_price) / max(sz.mid_price, 1e-12) < merge_pct:
+                if abs(sz.mid_price - rz.mid_price) < cross_dedup_dist:
                     s_score = self._zone_score(sz)
                     r_score = self._zone_score(rz)
                     if s_score >= r_score:
