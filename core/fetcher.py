@@ -231,6 +231,16 @@ def fetch_data(symbol: str, days: int = 180) -> pd.DataFrame:
 # Cache Management
 # ─────────────────────────────────────────────────────────────
 
+def _drop_partial_today(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    """Drop rows dated today (UTC). The cache must hold only closed daily
+    candles so indicators reading df.iloc[-1] always see a completed bar;
+    exchange APIs return today's in-progress candle and we strip it here."""
+    if df is None or len(df) == 0 or not isinstance(df.index, pd.DatetimeIndex):
+        return df
+    today_utc = datetime.now(timezone.utc).date()
+    return df[df.index.date < today_utc]
+
+
 def get_cache_path(symbol: str, data_dir: str) -> str:
     return os.path.join(data_dir, f"{symbol.upper()}_daily.csv")
 
@@ -261,7 +271,8 @@ def get_cache_status(symbol: str, data_dir: str) -> dict:
 
 
 def save_to_cache(df: pd.DataFrame, symbol: str, data_dir: str):
-    """Save OHLCV DataFrame to CSV cache."""
+    """Save OHLCV DataFrame to CSV cache — closed candles only."""
+    df = _drop_partial_today(df)
     path = get_cache_path(symbol, data_dir)
     df_out = df.copy()
     if isinstance(df_out.index, pd.DatetimeIndex):
@@ -285,7 +296,7 @@ def load_from_cache(symbol: str, data_dir: str) -> Optional[pd.DataFrame]:
             df = df.set_index("timestamp")
         if "volume" not in df.columns:
             df["volume"] = 1.0
-        return df
+        return _drop_partial_today(df)
     except Exception as e:
         logging.warning(f"Failed to load cache for {symbol}: {e}")
         return None
