@@ -237,7 +237,7 @@ COINGECKO_SYMBOL_FIX = {
 # ── Token Tiers (single source of truth = strategies.json) ───
 # Tier definitions live in strategies.json:tier_definitions and are loaded
 # lazily via the helpers below. The inclusive invariant
-#   top_3 ⊂ selected ⊂ top_20 ⊂ all
+#   top_3 ⊂ selected ⊂ all
 # is enforced on every load — a violation raises RuntimeError.
 
 import json as _json
@@ -248,13 +248,13 @@ _STRATEGIES_PATH = _os.path.join(
     "strategies.json",
 )
 
-_TIER_KEYS = ("top_3", "selected", "top_20", "all")
+_TIER_KEYS = ("top_3", "selected", "all")
 
 
 def load_tier_definitions() -> dict:
     """Load tier_definitions from strategies.json and validate inclusivity.
 
-    Returns: {"top_3": [...], "selected": [...], "top_20": [...], "all": [...]}
+    Returns: {"top_3": [...], "selected": [...], "all": [...]}
     Raises: RuntimeError if any tier is missing or the inclusive invariant fails.
     """
     with open(_STRATEGIES_PATH) as f:
@@ -275,27 +275,21 @@ def load_tier_definitions() -> dict:
         raise RuntimeError(
             f"tier invariant broken: top_3 ⊄ selected (missing {missing})"
         )
-    if not (sets["selected"] <= sets["top_20"]):
-        missing = sorted(sets["selected"] - sets["top_20"])
+    if not (sets["selected"] <= sets["all"]):
+        missing = sorted(sets["selected"] - sets["all"])
         raise RuntimeError(
-            f"tier invariant broken: selected ⊄ top_20 (missing {missing})"
-        )
-    if not (sets["top_20"] <= sets["all"]):
-        missing = sorted(sets["top_20"] - sets["all"])
-        raise RuntimeError(
-            f"tier invariant broken: top_20 ⊄ all (missing {missing})"
+            f"tier invariant broken: selected ⊄ all (missing {missing})"
         )
     return tiers
 
 
 def get_token_groups() -> dict:
-    """Return UI-friendly group dict (TOP 3 / SELECTED / TOP 20 / ALL)
+    """Return UI-friendly group dict (TOP 3 / SELECTED / ALL)
     derived from strategies.json. Used by /api/groups."""
     tiers = load_tier_definitions()
     return {
         "TOP 3": tiers["top_3"],
         "SELECTED": tiers["selected"],
-        "TOP 20": tiers["top_20"],
         "ALL": tiers["all"],
     }
 
