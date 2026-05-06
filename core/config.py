@@ -299,7 +299,7 @@ def get_all_tokens() -> list:
     return load_tier_definitions()["all"]
 
 # ── LLM Report Generation ───────────────────────────────────
-LLM_MODEL = "claude-haiku-4-5-20251001"
-LLM_MAX_TOKENS = 1500
+LLM_MODEL = "claude-sonnet-4-6"
+LLM_MAX_TOKENS = 2000
 LLM_RETRY_ATTEMPTS = 3
 LLM_RETRY_DELAY = 5
