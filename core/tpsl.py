@@ -139,18 +139,15 @@ def _compute_tp_sl_impl(
 
 
 def compute_tp_sl(analysis: dict) -> Optional[dict]:
-    """Balanced TP/SL — asymmetric cascade.
+    """Balanced TP/SL — symmetric 1 ATR cascade.
 
-    TP side cascades past resistances within 1 ATR (skip noise on the
-    way up, target meaningful levels). SL side cascades past supports
-    within 0.75 ATR — a tighter threshold so well-defended supports
-    just inside 1 ATR are accepted as stops, preserving R:R when the
-    next support cluster sits 2-3 ATR further down. Floor stays at
-    0.5 ATR on both sides so we never pick a stop within noise.
+    Both sides cascade past close levels within 1 ATR (skip noise,
+    target meaningful structure). Floor stays at 0.5 ATR on both sides
+    so we never pick a level within noise.
     """
     return _compute_tp_sl_impl(
         analysis,
-        tp_cascade_atr=1.0, sl_cascade_atr=0.75,
+        tp_cascade_atr=1.0, sl_cascade_atr=1.0,
         tp_min_atr=0.5, sl_min_atr=0.5,
         flavour="balanced",
     )
