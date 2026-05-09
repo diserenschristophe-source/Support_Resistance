@@ -27,7 +27,6 @@ Pipeline:
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
-from scipy.signal import argrelextrema
 from typing import List, Optional, Dict, Any
 
 from core.models import SRLevel, SRZone, compute_atr
@@ -99,18 +98,30 @@ class ProfessionalSRAnalysis2:
         else:
             trend = "Bullish (ST)" if close.iloc[-1] > close.iloc[-len(close)//3] else "Bearish (ST)"
 
-        opens = self.df["open"].values
-        closes = self.df["close"].values
+        # Half-split structure: compare max/min of first half vs second half of
+        # the window. Capped at 180 daily bars so the classifier reflects recent
+        # macro structure rather than ~3 years of cached history. Works at any
+        # window length (no edge-buffer exclusion), so 30/60-bar slices from
+        # main._structure_for_window also produce real labels instead of
+        # "Undefined" — which was the original bug this replaced.
+        STRUCTURE_WINDOW = 180
+        df_struct = self.df.tail(STRUCTURE_WINDOW)
+        opens = df_struct["open"].values
+        closes = df_struct["close"].values
         body_highs = np.maximum(opens, closes)
         body_lows = np.minimum(opens, closes)
 
-        hi_idx = argrelextrema(body_highs, np.greater, order=10)[0]
-        lo_idx = argrelextrema(body_lows, np.less, order=10)[0]
         structure = "Undefined"
         bias = 0.0
-        if len(hi_idx) >= 2 and len(lo_idx) >= 2:
-            hh = body_highs[hi_idx[-1]] > body_highs[hi_idx[-2]]
-            hl = body_lows[lo_idx[-1]] > body_lows[lo_idx[-2]]
+        n = len(body_highs)
+        if n >= 4:
+            mid = n // 2
+            h_first = float(body_highs[:mid].max())
+            h_last = float(body_highs[mid:].max())
+            l_first = float(body_lows[:mid].min())
+            l_last = float(body_lows[mid:].min())
+            hh = h_last > h_first
+            hl = l_last > l_first
             if hh and hl: structure = "HH + HL (Bullish)"; bias = 1.0
             elif not hh and not hl: structure = "LH + LL (Bearish)"; bias = -1.0
             elif hh: structure = "HH + LL (Transition)"; bias = 0.0
