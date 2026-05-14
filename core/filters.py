@@ -341,4 +341,8 @@ AVAILABLE_FILTERS.update({
     "rsi_cap": rsi_cap,
     "relative_volume": relative_volume,
     "mt_regime_gate": mt_regime_gate,
+    # Alias for naming consistency with trading-system/agents/ta/strategy.py.
+    # Same semantics: returns True iff regime is U (up) or T (transition),
+    # i.e. NOT in a confirmed downtrend.
+    "mt_not_downtrend": mt_regime_gate,
 })
