@@ -237,7 +237,7 @@ COINGECKO_SYMBOL_FIX = {
 # ── Token Tiers (single source of truth = strategies.json) ───
 # Tier definitions live in strategies.json:tier_definitions and are loaded
 # lazily via the helpers below. The inclusive invariant
-#   top_3 ⊂ selected ⊂ all
+#   selected ⊂ all
 # is enforced on every load — a violation raises RuntimeError.
 
 import json as _json
@@ -248,13 +248,13 @@ _STRATEGIES_PATH = _os.path.join(
     "strategies.json",
 )
 
-_TIER_KEYS = ("top_3", "selected", "all")
+_TIER_KEYS = ("selected", "all")
 
 
 def load_tier_definitions() -> dict:
     """Load tier_definitions from strategies.json and validate inclusivity.
 
-    Returns: {"top_3": [...], "selected": [...], "all": [...]}
+    Returns: {"selected": [...], "all": [...]}
     Raises: RuntimeError if any tier is missing or the inclusive invariant fails.
     """
     with open(_STRATEGIES_PATH) as f:
@@ -270,11 +270,6 @@ def load_tier_definitions() -> dict:
         tiers[k] = list(node["tokens"])
 
     sets = {k: set(v) for k, v in tiers.items()}
-    if not (sets["top_3"] <= sets["selected"]):
-        missing = sorted(sets["top_3"] - sets["selected"])
-        raise RuntimeError(
-            f"tier invariant broken: top_3 ⊄ selected (missing {missing})"
-        )
     if not (sets["selected"] <= sets["all"]):
         missing = sorted(sets["selected"] - sets["all"])
         raise RuntimeError(
@@ -284,11 +279,10 @@ def load_tier_definitions() -> dict:
 
 
 def get_token_groups() -> dict:
-    """Return UI-friendly group dict (TOP 3 / SELECTED / ALL)
+    """Return UI-friendly group dict (SELECTED / ALL)
     derived from strategies.json. Used by /api/groups."""
     tiers = load_tier_definitions()
     return {
-        "TOP 3": tiers["top_3"],
         "SELECTED": tiers["selected"],
         "ALL": tiers["all"],
     }
