@@ -17,22 +17,35 @@ All filters accept a DataFrame with OHLCV data and return:
 
 import numpy as np
 import pandas as pd
+import talib
 from typing import List, Tuple, Optional
 
 
 # ── Indicator helpers ────────────────────────────────────────
 
 def compute_rsi(series: pd.Series, period: int = 10) -> float:
-    """Compute RSI on the last `period` bars."""
-    delta = series.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(period).mean().iloc[-1]
-    avg_loss = loss.rolling(period).mean().iloc[-1]
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return float(100 - (100 / (1 + rs)))
+    """Compute Wilder-smoothed RSI at the LAST bar.
+
+    Canonical industry definition (TradingView default, TA-Lib default).
+    Aligned with live ta/ta17/ta17_ls agents on 2026-05-17 (was SMA from
+    2026-05-12, dashboard never received the 2026-05-14 "Plan A" revert
+    that re-Wildered the trading-system live path — flagged in PULSE
+    2026-05-14 20:30 UTC, fixed here).
+
+    Mirrors:
+      - trading-system/core/indicators/rsi.py::rsi_sma  (legacy name,
+        returns Wilder via talib.RSI)
+      - trading-system/agents/ta/strategy.py::_rsi_sma  (Wilder)
+      - Support_Resistance/core/filters.py::compute_rsi (Wilder)
+    """
+    arr = np.asarray(series, dtype=float)
+    if len(arr) < period + 1:
+        return float("nan")
+    rsi = talib.RSI(arr, period)
+    val = rsi[-1]
+    if np.isnan(val):
+        return float("nan")
+    return float(val)
 
 
 def compute_adx_di(df: pd.DataFrame, period: int = 14) -> dict:
