@@ -1,0 +1,177 @@
+# core/ Folder Strategy
+
+## Goal
+
+Eliminate the duplicated core/ folder. Support_Resistance owns the single copy
+of core/. sr-dashboard removes its local core/ entirely and imports it from
+Support_Resistance instead. No more syncing, no more drift.
+
+## Current state (the problem)
+
+| Repo               | Has core/? | Role                                          |
+|--------------------|-----------|-----------------------------------------------|
+| Support_Resistance | Yes       | Research lab — experiments, backtests, filters |
+| sr-dashboard       | Yes (copy)| Production — cron, web UI, charts, LLM        |
+
+Both contain identical core/ files. Kept in sync manually via rsync and diff.
+Any drift between the two is a silent bug.
+
+## Target state
+
+| Repo               | Has core/? | How it accesses core/                          |
+|--------------------|-----------|------------------------------------------------|
+| Support_Resistance | Yes       | Directly — it owns the folder                  |
+| sr-dashboard       | No        | Git submodule pointing to Support_Resistance   |
+
+core/ exists in one place only: the Support_Resistance repo.
+sr-dashboard references it as a git submodule. The server pulls both with
+`git pull --recurse-submodules` — no manual sync needed.
+
+---
+
+## Protection Rules
+
+### Rule 1 — core/ is read-only by default
+
+Claude must NEVER modify any file inside core/ unless the user explicitly asks
+for it. This includes:
+
+- No bug fixes
+- No refactors
+- No import cleanups
+- No type annotations
+- No "while I'm here" improvements
+
+The code is production-tested and working. Unsolicited changes risk breaking
+both the research pipeline and the live dashboard.
+
+### Rule 2 — research/ scripts adapt to core/, not the other way around
+
+If a research script doesn't work with the current core/ API, the fix goes in
+the research script — not in core/. The only exception is when the user
+explicitly decides that core/ itself needs to change.
+
+### Rule 3 — no partial edits
+
+If a core/ change is approved, it must be complete and tested before being
+pushed. A half-finished edit that gets pulled by sr-dashboard is worse than
+no edit at all.
+
+---
+
+## Modification Workflow (when explicitly approved)
+
+```
+1. User explicitly requests a core/ change
+2. Make the change in Support_Resistance/core/ (the only copy)
+3. Validate — run research scripts to confirm nothing breaks
+4. User commits and pushes Support_Resistance to GitHub
+5. sr-dashboard automatically gets the update on next submodule pull
+6. Server pulls sr-dashboard with --recurse-submodules — production updated
+```
+
+Support_Resistance is the single source of truth. There is no reverse direction.
+
+---
+
+## Migration Plan (current state → target state)
+
+### Step 1 — Confirm parity
+
+```bash
+diff -rq Support_Resistance/core/ sr-dashboard/core/
+```
+
+If any differences exist, resolve them first. Support_Resistance wins.
+
+### Step 2 — Remove core/ from sr-dashboard
+
+Delete sr-dashboard/core/ from git (not just the filesystem).
+
+```bash
+cd sr-dashboard
+git rm -r core/
+git commit -m "remove local core/ — will use submodule from Support_Resistance"
+```
+
+### Step 3 — Add submodule
+
+```bash
+cd sr-dashboard
+git submodule add https://github.com/<user>/Support_Resistance.git Support_Resistance
+```
+
+Then sr-dashboard imports core via the submodule path. Update imports in
+sr-dashboard to reference the submodule location, e.g.:
+
+Option A — symlink inside sr-dashboard:
+```bash
+ln -s Support_Resistance/core core
+```
+This preserves all existing `from core.xxx import` statements unchanged.
+
+Option B — adjust Python path:
+```python
+import sys
+sys.path.insert(0, "Support_Resistance")
+```
+Less clean, but no symlink needed.
+
+Option A (symlink committed to git) is recommended — zero import changes.
+
+### Step 4 — Update server deployment
+
+```bash
+# On the server, one-time setup after pulling the submodule change:
+git submodule init
+git submodule update
+
+# From then on, every pull fetches both repos:
+git pull --recurse-submodules
+```
+
+### Step 5 — Verify
+
+```bash
+# sr-dashboard should run exactly as before
+cd sr-dashboard
+python3 main.py --tokens BTC ETH SOL --skip-charts --skip-llm
+```
+
+---
+
+## Day-to-day workflow after migration
+
+### Updating core/ (when approved)
+
+```
+1. Edit files in Support_Resistance/core/
+2. Test with research scripts
+3. Commit & push Support_Resistance
+
+4. In sr-dashboard:
+   git submodule update --remote
+   git add Support_Resistance
+   git commit -m "bump core submodule"
+   git push
+
+5. Server: git pull --recurse-submodules
+```
+
+### Working on sr-dashboard (non-core changes)
+
+Normal git workflow — push, pull, deploy. core/ is untouched because it's
+a submodule reference, not local files.
+
+---
+
+## Summary
+
+| Aspect                    | Rule                                                    |
+|---------------------------|---------------------------------------------------------|
+| Who owns core/?           | Support_Resistance (the only copy)                      |
+| Does sr-dashboard have core/? | No — it references it via git submodule              |
+| Can Claude edit core/?    | No, unless user explicitly asks                         |
+| Direction of changes      | Support_Resistance → sr-dashboard (one-way, always)     |
+| Server deployment         | git pull --recurse-submodules                           |
+| Sync method               | Git submodule — automatic, no manual rsync              |
