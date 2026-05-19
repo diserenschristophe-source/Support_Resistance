@@ -26,3 +26,16 @@ logs/
 
 # Old / backup code
 core/old/
+
+# IDE
+.vscode/
+
+# Caches (research pickles, scratch)
+.cache/
+*.pkl
+
+# Local archives
+output.zip
+
+# Walk-forward result CSVs (large — regenerate via research/walkforward_optimize_full.py)
+research/walkforward_full/*/results.csv
