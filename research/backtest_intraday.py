@@ -265,13 +265,23 @@ def partial_bar_rsi(
 ) -> float:
     """Compute RSI using closed daily closes plus today's in-progress close.
 
+    Uses SMA-smoothed RSI (canonical ecosystem standard, matches
+    sr-dashboard/core/filters.py::compute_rsi and the live ta/ta17 agent).
+    Standardized 2026-05-12 — previously used talib.RSI (Wilder).
     Returns NaN if the series is too short.
     """
     if len(daily_closes_through_yday) < period + 1:
         return float("nan")
     series = np.concatenate([daily_closes_through_yday, [current_intraday_price]]).astype(float)
-    rsi = talib.RSI(series, period)
-    return float(rsi[-1])
+    delta = np.diff(series)
+    gain = np.clip(delta, 0, None)
+    loss = -np.clip(delta, None, 0)
+    avg_gain = gain[-period:].mean()
+    avg_loss = loss[-period:].mean()
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return float(100 - (100 / (1 + rs)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

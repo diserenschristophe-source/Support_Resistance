@@ -1,0 +1,5 @@
+max_slots,per_token_cap,per_slot_fraction,start_ts,n_eligible,n_taken,n_realized,n_skipped_slots,n_skipped_token_cap,initial_capital,final_equity,total_return_pct,cagr_pct,max_dd_pct,monthly_sharpe,calmar,win_rate_pct,avg_win_pct,avg_loss_pct,btc_filter,mode
+1,1,1.0,all,399,3,2,396,0,10000.0,9076.71,-9.23,-7.12,-9.23,-0.87,-0.77,0.0,0.0,-4.73,OFF,single-slot
+4,3,0.25,all,399,9,5,390,0,10000.0,10086.2,0.86,0.66,-2.31,-0.87,0.28,20.0,18.67,-3.78,OFF,multi-slot(4×3)
+1,1,1.0,all,157,8,7,149,0,10000.0,10398.61,3.99,10.55,-5.91,1.35,1.79,28.6,9.32,-2.68,ON,single-slot
+4,3,0.25,all,157,15,11,142,0,10000.0,10558.8,5.59,14.97,-1.16,2.41,12.92,45.5,7.75,-2.76,ON,multi-slot(4×3)
