@@ -57,6 +57,13 @@ def _compute_tp_sl_impl(
     resistances = analysis.get("resistance", [])
     ms = analysis.get("market_structure", {})
     atr = ms.get("atr14", 0)
+    # Refuse to score without a usable volatility scale. With atr <= 0 (missing
+    # key / flat series) or NaN, the cascade below would pick the *nearest*
+    # level and the noise-floor discard (gated on `atr > 0`) would be skipped —
+    # producing a hair-trigger TP/SL whose degenerate raw_rr then sorts to the
+    # top of the ranking. Healthy tokens (atr > 0) are unaffected.
+    if atr is None or not (atr > 0):
+        return None
 
     # ── Find TP: cascade through resistances (nearest-first) ──
     tp = None

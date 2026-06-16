@@ -103,11 +103,19 @@ def fetch_geckoterminal(symbol: str, days: int = 180) -> Optional[pd.DataFrame]:
                 seen.add(candle[0])
                 unique.append(candle)
 
-        rows = [{
-            "timestamp": pd.to_datetime(c[0], unit="s", utc=True),
-            "open": float(c[1]), "high": float(c[2]),
-            "low": float(c[3]), "close": float(c[4]), "volume": float(c[5]),
-        } for c in unique]
+        rows = []
+        for c in unique:
+            close = float(c[4])
+            # GeckoTerminal reports volume in USD (currency=usd requested above),
+            # whereas Binance/MEXC/Hyperliquid report base-coin volume. Convert to
+            # base-coin so a cache that ever spans a source switch never mixes
+            # denominations (which would distort RVOL and volume-profile levels).
+            vol_coin = (float(c[5]) / close) if close > 0 else 0.0
+            rows.append({
+                "timestamp": pd.to_datetime(c[0], unit="s", utc=True),
+                "open": float(c[1]), "high": float(c[2]),
+                "low": float(c[3]), "close": close, "volume": vol_coin,
+            })
 
         return pd.DataFrame(rows).set_index("timestamp").sort_index()
     except Exception as e:
