@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+# =============================================================================
+# ⚠️  RESEARCH-GRADE — NOT DECISION-GRADE.  (validity audit 2026-06-16)
+#   • V1 ENGINE: `core.sr_analysis` (line 34) — the OLD detector. Live trades
+#     on V2 `core.sr_analysis2`.
+#   • UNCOSTED: PnL = raw (exit-entry)/entry with NO fee/slippage/funding
+#     (lines 96, 103, 110, 118, 174) — overstates edge.
+#   Numbers here are HYPOTHESES. Reproduce on the BLESSED, fully-costed engine
+#   before any decision: trading-system/research/run_portfolio_backtest.py
+#   (see research/BACKTEST_ENGINES.md).
+# =============================================================================
 """
 backtest_model.py — Backtest the S/R model with TP/SL/Timeout.
 ================================================================

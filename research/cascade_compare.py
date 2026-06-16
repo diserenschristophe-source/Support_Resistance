@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+# =============================================================================
+# ⚠️  RESEARCH-GRADE — NOT DECISION-GRADE.  (validity audit 2026-06-16)
+#   • V1 ENGINE: `core.sr_analysis` (line 56) — the OLD detector. Live trades
+#     on V2 `core.sr_analysis2`, so the signals tested here are NOT live's.
+#   • PARTIAL COSTS: charges 3bps/side fee (line 66) but NO slippage or funding
+#     — lighter than live; use for relative comparison only, not absolute edge.
+#   • Fixed universes (lines 72-84) → survivorship bias.
+#   Numbers here are HYPOTHESES. Reproduce on the BLESSED, fully-costed engine
+#   before any decision: trading-system/research/run_portfolio_backtest.py
+#   (see research/BACKTEST_ENGINES.md).
+# =============================================================================
 """
 cascade_compare.py — Re-run the sr_backtest_report.md backtest with asymmetric
 cascade thresholds and compare against the 1.0/1.0 baseline.
