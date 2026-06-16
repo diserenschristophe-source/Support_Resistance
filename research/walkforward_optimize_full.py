@@ -1,4 +1,17 @@
 #!/usr/bin/env python3
+# =============================================================================
+# ⚠️  RESEARCH-GRADE — NOT DECISION-GRADE.  (validity audit 2026-06-16)
+#   • V1 ENGINE: scores signals via `core.sr_analysis` (line 66) — the OLD
+#     detector. Live trades on V2 `core.sr_analysis2`.
+#   • UNCOSTED: PnL = raw (exit-entry)/entry, compounded, with NO fee/slippage/
+#     funding (lines 489-490, 577) — systematically overstates edge.
+#   • Fixed universes (UNIVERSE_17 / all-51, lines 72-91) → survivorship bias.
+#   This optimizer produced earlier ta17 / ta44 filter-combo picks; treat them
+#   as HYPOTHESES, not results. Reproduce on the BLESSED, fully-costed engine
+#   before any config/deploy decision:
+#     trading-system/research/run_portfolio_backtest.py
+#     (4.5bps + 5bps slippage + funding; see research/BACKTEST_ENGINES.md)
+# =============================================================================
 """
 walkforward_optimize_full.py — Full walk-forward optimization (Option 1 / A+B+C+D).
 ====================================================================================
