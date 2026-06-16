@@ -24,6 +24,8 @@ Pipeline:
   9. TA-friendly display rounding on key_level
 """
 
+import sys
+
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
@@ -394,7 +396,11 @@ class ProfessionalSRAnalysis2:
         try:
             detector = SRDetector(window_df, cfg)
             levels = detector.detect_all(max_levels=15, min_strength=config.MIN_STRENGTH)
-        except Exception:
+        except Exception as e:
+            # Surface the failure — silently returning [] drops this window's
+            # levels, thinning the S/R set with no signal to operator or logs.
+            print(f"[sr_analysis2] {days}d-window detector failed: "
+                  f"{type(e).__name__}: {e}", file=sys.stderr)
             return []
 
         window_offset = len(self.df) - days

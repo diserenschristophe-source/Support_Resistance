@@ -314,10 +314,10 @@ def relative_volume(df: pd.DataFrame, period: int = 20,
     """RVOL(20) >= threshold — volume confirms the move."""
     vol = df["volume"]
     if len(vol) < period:
-        return True, ""
+        return False, f"insufficient volume history (<{period} bars)"
     avg_vol = vol.rolling(period).mean().iloc[-1]
     if avg_vol <= 0:
-        return True, ""
+        return False, "no volume to confirm (avg vol <= 0)"
     rvol = vol.iloc[-1] / avg_vol
     if rvol >= threshold:
         return True, ""
