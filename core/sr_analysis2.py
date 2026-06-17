@@ -223,6 +223,8 @@ class ProfessionalSRAnalysis2:
         For each cluster, the highest-scored zone (by _zone_score) provides
         both key_level and metadata.  Touches are summed across the cluster.
         """
+        if not config.ENABLE_MERGE:
+            return list(zones)
         if len(zones) < 2:
             return zones
 
@@ -322,6 +324,8 @@ class ProfessionalSRAnalysis2:
 
     def _drop_sandwiched_minors(self, zones):
         """Remove Minor zones that are sandwiched between two Majors within 1x ATR."""
+        if not config.DROP_SANDWICHED_MINORS:
+            return list(zones)
         if len(zones) < 3:
             return zones
         majors = [z for z in zones if z.tier == "Major"]
@@ -429,7 +433,7 @@ class ProfessionalSRAnalysis2:
         # Step 2: Deduplicate across windows (ATR-based, anchor-stable)
         # Keep the most structurally significant level when windows overlap.
         # Anchor price stays fixed to prevent chain drift.
-        dedup_dist = self.atr * 0.4
+        dedup_dist = (self.atr * 0.4) if config.ENABLE_CROSS_WINDOW_DEDUP else -1.0
         all_levels.sort(key=lambda l: l.price)
         deduped = []       # (level, anchor_price) pairs
         for l in all_levels:
@@ -454,7 +458,7 @@ class ProfessionalSRAnalysis2:
                                       volume_weight=0.9, recency_score=0.5))
 
         # Step 4: Convert to zones
-        max_d = self.current_price * config.MAX_DISTANCE_PCT / 100
+        max_d = float("inf") if config.MAX_DISTANCE_PCT <= 0 else self.current_price * config.MAX_DISTANCE_PCT / 100
         zones = [self._level_to_zone(l, bias) for l in raw_levels
                  if abs(l.price - self.current_price) <= max_d]
 

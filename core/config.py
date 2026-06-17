@@ -13,9 +13,16 @@ WINDOWS = [
 
 # ── SR Analysis ──────────────────────────────────────────────
 ZONE_ATR_MULT = 0.2
-MAX_ZONES_PER_SIDE = 3
+MAX_ZONES_PER_SIDE = 5
 MIN_STRENGTH = 0.10
-MAX_DISTANCE_PCT = 30.0
+MAX_DISTANCE_PCT = 0.0        # 0 = unlimited (rebuild 2026-06-17: no distance cap)
+
+# ── Rebuild toggles (2026-06-17) — Phase 1 "see everything": disable the three
+# nearby-collapse rules to surface the FULL candidate level set. Restore all
+# three to True (and MAX_DISTANCE_PCT=30.0, MAX_ZONES_PER_SIDE=3) for prior behavior.
+ENABLE_MERGE = False              # _merge_nearby (was 0.5 ATR adjacent merge)
+ENABLE_CROSS_WINDOW_DEDUP = False # cross-window dedup (was 0.4 ATR)
+DROP_SANDWICHED_MINORS = False    # _drop_sandwiched_minors (was 1 ATR)
 MERGE_THRESHOLD_PCT = 0.02    # 2% for merging nearby zones
 DEDUP_THRESHOLD_PCT = 0.02    # 2% for cross-window dedup
 
